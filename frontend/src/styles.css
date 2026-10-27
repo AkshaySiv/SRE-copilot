@@ -200,9 +200,13 @@ table.table { width: 100%; border-collapse: collapse; }
 .panel { overflow: hidden; }
 .panel.graph-wrap, .panel.ns-list { overflow: auto; }
 .table-wrap { width: 100%; overflow-x: auto; }
-.table td, .table th { word-break: break-word; }
-.inv-table td.what { min-width: 240px; }
-.inv-table th:first-child, .inv-table td:first-child { width: 120px; }
+/* Only free-text cells may wrap anywhere; short cells (status, severity, time) never break mid-word. */
+.table th { white-space: nowrap; }
+.table td.wrap-text { overflow-wrap: anywhere; }
+.inv-table td.what { min-width: 240px; width: 34%; }
+.inv-table .c-status { width: 1%; white-space: nowrap; }
+.inv-table .c-sev { width: 1%; white-space: nowrap; }
+.inv-table .c-when { width: 1%; white-space: nowrap; text-align: right; }
 .clamp-2, .clamp-3 { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
 .clamp-2 { -webkit-line-clamp: 2; } .clamp-3 { -webkit-line-clamp: 3; }
 .show-md, .show-sm { display: none; }
@@ -214,7 +218,7 @@ div.show-md { margin-top: 4px; }
 @media (max-width: 640px) {
   .hide-sm { display: none; }
   .show-sm { display: inline; }
-  .inv-table th:first-child, .inv-table td:first-child { width: auto; padding-right: 4px; }
+  .inv-table .c-status { padding-right: 4px; }
   .inv-table td.what { min-width: 0; }
   .hero-ask { padding: 14px; }
   .hero-ask .row { justify-content: flex-end; }

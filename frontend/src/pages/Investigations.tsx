@@ -9,6 +9,18 @@ import { Empty, ErrorBox, HealthPill, Spinner, useAsync } from "../components/ui
 
 const STATUS_HEALTH: Record<string, string> = { completed: "healthy", running: "unknown", queued: "unknown", failed: "critical", cancelled: "warning" };
 
+/** One-line plain-text preview: answers are Markdown, so strip headings, emphasis, code marks and bullets. */
+function preview(i: Investigation): string {
+  const raw = i.root_cause ?? i.summary ?? i.error ?? "";
+  return raw
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^\s{0,3}(#{1,6}|[-*+]|\d+\.)\s+/gm, "")
+    .replace(/(\*\*|__|`)/g, "")   // keep single _ and * so names like DB_POOL_SIZE survive
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function StatusPill({ status, running }: { status: string; running?: boolean }) {
   return <HealthPill health={STATUS_HEALTH[status] ?? "unknown"} label={running ? "running" : status} />;
 }
@@ -59,20 +71,20 @@ export default function Investigations() {
         <ErrorBox error={list.error} />
         {list.loading && !list.data ? <div className="panel-pad"><Spinner /></div> : !list.data?.items.length ? <Empty>Nothing here yet.</Empty> : (
           <div className="table-wrap"><table className="table inv-table">
-            <thead><tr><th>Status</th><th>What</th><th className="hide-md">Severity</th><th className="hide-md">Root cause / answer</th><th className="hide-sm">When</th></tr></thead>
+            <thead><tr><th className="c-status">Status</th><th>What</th><th className="c-sev hide-md">Severity</th><th className="hide-md">Root cause / answer</th><th className="c-when hide-sm">When</th></tr></thead>
             <tbody>
               {list.data.items.map((i) => (
                 <tr key={i.id} className="clickable" onClick={() => navigate(`/investigations/${i.id}`)}>
-                  <td><StatusPill status={i.status} running={i.running} /></td>
-                  <td className="what">
+                  <td className="c-status"><StatusPill status={i.status} running={i.running} /></td>
+                  <td className="what wrap-text">
                     <div className="title-line"><b>{i.title}</b></div>
                     <div className="muted small">{i.kind} · by {i.created_by}<span className="show-sm"> · {timeAgo(i.created_at)}</span>
                       {i.severity && <span className="show-md"> · <b className={`sev-${i.severity}`} style={{ textTransform: "capitalize" }}>{i.severity}</b></span>}</div>
-                    {(i.root_cause ?? i.summary ?? i.error) && <div className="small text-2 show-md clamp-2">{i.root_cause ?? i.summary ?? i.error}</div>}
+                    {preview(i) && <div className="small text-2 show-md clamp-2">{preview(i)}</div>}
                   </td>
-                  <td className="hide-md">{i.severity ? <b className={`sev-${i.severity}`} style={{ textTransform: "capitalize" }}>{i.severity}</b> : <span className="muted">—</span>}</td>
-                  <td className="small text-2 hide-md"><div className="clamp-3">{i.root_cause ?? i.summary ?? i.error ?? ""}</div></td>
-                  <td className="small muted hide-sm" style={{ whiteSpace: "nowrap" }}>{timeAgo(i.created_at)}</td>
+                  <td className="c-sev hide-md">{i.severity ? <b className={`sev-${i.severity}`} style={{ textTransform: "capitalize" }}>{i.severity}</b> : <span className="muted">—</span>}</td>
+                  <td className="small text-2 hide-md wrap-text"><div className="clamp-3">{preview(i)}</div></td>
+                  <td className="small muted c-when hide-sm">{timeAgo(i.created_at)}</td>
                 </tr>
               ))}
             </tbody>
