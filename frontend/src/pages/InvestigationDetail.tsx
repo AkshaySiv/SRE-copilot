@@ -226,7 +226,19 @@ export default function InvestigationDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail.data?.id, streamKey]);
 
-  useEffect(() => { if (running) bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [events.length, running, live?.text.length]);
+  // Follow new output only while the user is already at the bottom; never yank them back if they scrolled up.
+  const [following, setFollowing] = useState(true);
+  useEffect(() => {
+    const box = bottom.current?.closest(".main");
+    if (!box) return;
+    const onScroll = () => setFollowing(box.scrollHeight - box.scrollTop - box.clientHeight < 160);
+    box.addEventListener("scroll", onScroll, { passive: true });
+    return () => box.removeEventListener("scroll", onScroll);
+  }, [detail.data?.id]);
+  useEffect(() => {
+    const box = bottom.current?.closest(".main");
+    if (running && following && box) box.scrollTop = box.scrollHeight;
+  }, [events.length, running, live?.text.length, following]);
 
   if (detail.loading && !detail.data) return <div className="page"><Spinner /></div>;
   if (detail.error) return <div className="page"><ErrorBox error={detail.error} /></div>;
@@ -264,6 +276,11 @@ export default function InvestigationDetail() {
           {d.error && !running && <ErrorBox error={d.error} />}
           <div ref={bottom} />
           <div className="composer">
+            {running && !following && (
+              <div style={{ textAlign: "center", marginBottom: 8 }}>
+                <button className="btn sm" onClick={() => setFollowing(true)}>↓ Jump to latest</button>
+              </div>
+            )}
             <form className="ask-inner" onSubmit={(e) => { e.preventDefault(); if (followUp.trim() && !running) send(); }}>
               <input className="input" disabled={running} placeholder={running ? "The copilot is working…" : "Ask a follow-up question…"} value={followUp} onChange={(e) => setFollowUp(e.target.value)} />
               <button className="btn primary" disabled={running || !followUp.trim()}><Send size={14} /> Send</button>
