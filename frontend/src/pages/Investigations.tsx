@@ -46,8 +46,8 @@ export default function Investigations() {
         <ErrorBox error={err} />
       </div>
 
-      <div className="row" style={{ marginBottom: 10 }}>
-        <div className="row grow" style={{ maxWidth: 360, background: "var(--bg-2)", border: "1px solid var(--border-2)", borderRadius: 8, padding: "0 10px" }}>
+      <div className="row wrap" style={{ marginBottom: 10 }}>
+        <div className="row grow" style={{ maxWidth: 360, minWidth: 220, background: "var(--bg-2)", border: "1px solid var(--border-2)", borderRadius: 8, padding: "0 10px" }}>
           <Search size={14} className="muted" /><input className="input" style={{ border: 0, background: "transparent" }} placeholder="Search past incidents and questions" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         <select className="select" style={{ width: 160 }} value={kind} onChange={(e) => setKind(e.target.value)}>
@@ -58,20 +58,25 @@ export default function Investigations() {
       <div className="panel">
         <ErrorBox error={list.error} />
         {list.loading && !list.data ? <div className="panel-pad"><Spinner /></div> : !list.data?.items.length ? <Empty>Nothing here yet.</Empty> : (
-          <table className="table">
-            <thead><tr><th>Status</th><th>What</th><th>Severity</th><th>Root cause / answer</th><th>When</th></tr></thead>
+          <div className="table-wrap"><table className="table inv-table">
+            <thead><tr><th>Status</th><th>What</th><th className="hide-md">Severity</th><th className="hide-md">Root cause / answer</th><th className="hide-sm">When</th></tr></thead>
             <tbody>
               {list.data.items.map((i) => (
                 <tr key={i.id} className="clickable" onClick={() => navigate(`/investigations/${i.id}`)}>
                   <td><StatusPill status={i.status} running={i.running} /></td>
-                  <td style={{ maxWidth: 380 }}><div><b>{i.title}</b></div><div className="muted small">{i.kind} · by {i.created_by}</div></td>
-                  <td>{i.severity ? <b className={`sev-${i.severity}`} style={{ textTransform: "capitalize" }}>{i.severity}</b> : <span className="muted">—</span>}</td>
-                  <td className="small text-2" style={{ maxWidth: 460 }}>{(i.root_cause ?? i.summary ?? i.error ?? "").slice(0, 220)}</td>
-                  <td className="small muted" style={{ whiteSpace: "nowrap" }}>{timeAgo(i.created_at)}</td>
+                  <td className="what">
+                    <div className="title-line"><b>{i.title}</b></div>
+                    <div className="muted small">{i.kind} · by {i.created_by}<span className="show-sm"> · {timeAgo(i.created_at)}</span>
+                      {i.severity && <span className="show-md"> · <b className={`sev-${i.severity}`} style={{ textTransform: "capitalize" }}>{i.severity}</b></span>}</div>
+                    {(i.root_cause ?? i.summary ?? i.error) && <div className="small text-2 show-md clamp-2">{i.root_cause ?? i.summary ?? i.error}</div>}
+                  </td>
+                  <td className="hide-md">{i.severity ? <b className={`sev-${i.severity}`} style={{ textTransform: "capitalize" }}>{i.severity}</b> : <span className="muted">—</span>}</td>
+                  <td className="small text-2 hide-md"><div className="clamp-3">{i.root_cause ?? i.summary ?? i.error ?? ""}</div></td>
+                  <td className="small muted hide-sm" style={{ whiteSpace: "nowrap" }}>{timeAgo(i.created_at)}</td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </div>
     </div>

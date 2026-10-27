@@ -20,13 +20,13 @@ function ToolStep({ call, result }: { call: InvEvent; result?: InvEvent }) {
   const cls = !result ? "run" : ok ? "ok" : "err";
   return (
     <details className={`step ${cls}`}>
-      <summary className="row" style={{ width: "100%" }}>
+      <summary>
         <span className="step-icon">{!result ? <Spinner size={13} /> : ok ? <CheckCircle2 size={14} /> : <XCircle size={14} />}</span>
-        <span className="grow">{call.data.label}</span>
-        <span className="muted small">{call.data.integration}{result ? ` · ${(result.data.duration_ms / 1000).toFixed(1)}s` : ""}</span>
+        <span className="grow step-label">{call.data.label}</span>
+        <span className="muted small step-meta">{call.data.integration}{result ? ` · ${(result.data.duration_ms / 1000).toFixed(1)}s` : ""}</span>
       </summary>
-      <div style={{ marginTop: 8, marginLeft: 34 }}>
-        <div className="muted small mono">{call.data.tool}({JSON.stringify(call.data.args)})</div>
+      <div className="step-body">
+        <div className="muted small mono args">{call.data.tool}({JSON.stringify(call.data.args)})</div>
         {result && <pre className="code logs" style={{ marginTop: 6, maxHeight: 320 }}>{result.data.output}</pre>}
       </div>
     </details>

@@ -195,3 +195,43 @@ table.table { width: 100%; border-collapse: collapse; }
 .caret { display: inline-block; width: 7px; height: 1em; margin-left: 2px; vertical-align: -2px; background: var(--accent); animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
 .answer.streaming { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+
+/* ---------- responsive tables ---------- */
+.panel { overflow: hidden; }
+.panel.graph-wrap, .panel.ns-list { overflow: auto; }
+.table-wrap { width: 100%; overflow-x: auto; }
+.table td, .table th { word-break: break-word; }
+.inv-table td.what { min-width: 240px; }
+.inv-table th:first-child, .inv-table td:first-child { width: 120px; }
+.clamp-2, .clamp-3 { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.clamp-2 { -webkit-line-clamp: 2; } .clamp-3 { -webkit-line-clamp: 3; }
+.show-md, .show-sm { display: none; }
+div.show-md { margin-top: 4px; }
+@media (max-width: 1000px) {
+  .hide-md { display: none; }
+  .show-md { display: inline; } div.show-md { display: -webkit-box; }
+}
+@media (max-width: 640px) {
+  .hide-sm { display: none; }
+  .show-sm { display: inline; }
+  .inv-table th:first-child, .inv-table td:first-child { width: auto; padding-right: 4px; }
+  .inv-table td.what { min-width: 0; }
+  .hero-ask { padding: 14px; }
+  .hero-ask .row { justify-content: flex-end; }
+}
+
+/* ---------- investigation timeline layout ---------- */
+.inv-layout > *, .timeline, .timeline > * { min-width: 0; }
+details.step { display: block; }
+details.step > summary { display: flex; align-items: center; gap: 10px; }
+details.step .step-label { min-width: 0; overflow-wrap: anywhere; }
+details.step .step-meta { white-space: nowrap; flex: none; }
+details.step .step-body { margin: 8px 0 0 34px; min-width: 0; }
+details.step .args { overflow-wrap: anywhere; }
+pre.code { max-width: 100%; }
+.thinking, .answer, .msg-user { overflow-wrap: anywhere; }
+.page-head h1 { overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  details.step .step-body { margin-left: 0; }
+  details.step .step-meta { display: none; }
+}

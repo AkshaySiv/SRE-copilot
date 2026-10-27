@@ -11,7 +11,7 @@ export default function Audit() {
       <ErrorBox error={log.error} />
       <div className="panel">
         {log.loading && !log.data ? <div className="panel-pad"><Spinner /></div> : !log.data?.length ? <Empty>No entries yet.</Empty> : (
-          <table className="table">
+          <div className="table-wrap"><table className="table">
             <thead><tr><th>When</th><th>Who</th><th>Event</th><th>Target</th><th>Details</th></tr></thead>
             <tbody>
               {log.data.map((e) => (
@@ -24,7 +24,7 @@ export default function Audit() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </div>
     </div>
