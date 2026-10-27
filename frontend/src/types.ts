@@ -44,7 +44,8 @@ export interface Topology { nodes: (ResourceSummary & { id: string })[]; edges: 
 export interface KEvent { type: string; reason: string; object: string; namespace: string; message: string; count: number; age: string }
 export interface ResourceDetail { summary: ResourceSummary; events: KEvent[]; yaml: string }
 
-export interface InvEvent { seq: number; type: string; data: any; created_at: string }
+export interface InvEvent { seq: number; type: string; data: any; created_at?: string; ephemeral?: boolean }
+export interface LiveText { kind: "thinking" | "answer" | "report"; id: string; text: string }
 
 export interface Remediation {
   id: string; investigation_id: string; action: string; integration_id: string; params: Record<string, unknown>;

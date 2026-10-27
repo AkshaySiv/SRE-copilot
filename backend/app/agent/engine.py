@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage,
+                                     message_chunk_to_message)
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
@@ -46,6 +47,8 @@ class RunRequest:
     tool_timeout: int = 60
     tool_output_max_chars: int = 12000
     max_parallel_tools: int = 4
+    # Fire-and-forget live updates (not persisted): live(kind, stream_id, text_so_far)
+    live: Callable[[str, str, str], None] | None = None
 
 
 @dataclass
@@ -101,6 +104,50 @@ def transcript_digest(messages: list[AnyMessage], budget: int = 60_000) -> str:
     return text if len(text) <= budget else "…[earlier steps omitted]…\n" + text[-budget:]
 
 
+class _Throttle:
+    """Coalesces token deltas so the browser gets ~8 updates/second instead of one per token."""
+
+    def __init__(self, req: RunRequest, kind: str, interval: float = 0.12):
+        self.req, self.kind, self.interval = req, kind, interval
+        self.id = f"{kind}-{time.monotonic_ns()}"
+        self.text = ""
+        self._last = 0.0
+        self._sent = ""
+
+    def add(self, piece: str) -> None:
+        self.text += piece
+        now = time.monotonic()
+        if now - self._last >= self.interval:
+            self.flush()
+            self._last = now
+
+    def flush(self) -> None:
+        if self.req.live and self.text != self._sent:
+            self.req.live(self.kind, self.id, self.text)
+            self._sent = self.text
+
+
+async def stream_llm(req: RunRequest, model: Any, messages: list[AnyMessage], kind: str) -> AnyMessage:
+    """Call the model with token streaming, forwarding text as it arrives. Falls back to a plain call
+    for providers that cannot stream (tool calls are still assembled correctly from the chunks)."""
+    if req.live is None:
+        return await model.ainvoke(messages)
+    throttle = _Throttle(req, kind)
+    full = None
+    try:
+        async for chunk in model.astream(messages):
+            full = chunk if full is None else full + chunk
+            piece = text_of(chunk)
+            if piece:
+                throttle.add(piece)
+    except NotImplementedError:
+        return await model.ainvoke(messages)
+    throttle.flush()
+    if full is None:
+        return await model.ainvoke(messages)
+    return message_chunk_to_message(full)
+
+
 async def run_investigation(req: RunRequest) -> RunResult:
     bound = bind(req.plugins, req.internal_tools)
     if not bound:
@@ -113,12 +160,13 @@ async def run_investigation(req: RunRequest) -> RunResult:
     async def agent_node(state: AgentState):
         await req.emit("status", {"phase": "thinking", "step": state["steps"] + 1})
         started = time.monotonic()
-        resp = await llm_tools.ainvoke(state["messages"])
+        resp = await stream_llm(req, llm_tools, state["messages"], "thinking")
         await req.emit("llm_call", {"step": state["steps"] + 1,
                                     "duration_ms": int((time.monotonic() - started) * 1000)})
         _usage_add(usage, resp)
         note = text_of(resp).strip()
-        if note:
+        is_final_answer = req.mode == "question" and not getattr(resp, "tool_calls", None)
+        if note and not is_final_answer:
             await req.emit("thinking", {"text": note})
         return {"messages": [resp], "steps": state["steps"] + 1}
 
@@ -166,8 +214,8 @@ async def run_investigation(req: RunRequest) -> RunResult:
             result.answer = text_of(last).strip()
         else:
             await req.emit("status", {"phase": "writing_answer"})
-            resp = await req.llm.ainvoke([synth_system, HumanMessage(content=f"Investigation transcript:\n{digest}\n\n"
-                                                                             f"{prompts.ANSWER_FINAL_PROMPT}")])
+            resp = await stream_llm(req, req.llm, [synth_system, HumanMessage(
+                content=f"Investigation transcript:\n{digest}\n\n{prompts.ANSWER_FINAL_PROMPT}")], "answer")
             _usage_add(usage, resp)
             result.answer = text_of(resp).strip()
         return result
@@ -178,7 +226,7 @@ async def run_investigation(req: RunRequest) -> RunResult:
     convo: list[AnyMessage] = [synth_system, HumanMessage(content=f"Investigation transcript:\n{digest}\n\n{final_prompt}")]
     error = ""
     for attempt in range(2):
-        resp = await req.llm.ainvoke(convo)
+        resp = await stream_llm(req, req.llm, convo, "report")
         _usage_add(usage, resp)
         raw = text_of(resp)
         try:

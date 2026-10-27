@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     tool_timeout_seconds: int = 60
     tool_output_max_chars: int = 12_000
     max_parallel_tools: int = 4
+    # Stream model output token-by-token to the UI (falls back automatically if a provider can't stream).
+    stream_responses: bool = True
 
     # Remediation: "disabled" = report only, "approval" = human approves each action after a dry-run.
     remediation_mode: Literal["disabled", "approval"] = "approval"

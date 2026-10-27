@@ -101,6 +101,7 @@ All server settings are environment variables prefixed `SRECOPILOT_` — see `ba
 | `BOOTSTRAP_FILE` | | YAML of integrations to upsert at startup (see `deploy/integrations.example.yaml`). |
 | `PLUGIN_MODULES` | `[]` | Extra Python modules to import, for your own plugins/actions. |
 | `AGENT_MAX_STEPS` / `AGENT_TIMEOUT_SECONDS` | 30 / 900 | Investigation budget. |
+| `STREAM_RESPONSES` | `true` | Stream model output token-by-token into the investigation timeline. |
 
 **Roles:** viewers browse and investigate; operators also dry-run/approve/reject remediations and see the audit
 log; admins manage integrations.

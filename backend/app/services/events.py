@@ -62,3 +62,8 @@ class EventRecorder:
                 payload = {"seq": ev.seq, "type": type_, "data": ev.data, "created_at": ev.created_at.isoformat()}
         bus.publish(self.investigation_id, payload)
         return payload
+
+    def live(self, kind: str, stream_id: str, text: str) -> None:
+        """Ephemeral token stream: pushed to connected browsers, never stored (the final text is)."""
+        bus.publish(self.investigation_id, {"seq": None, "type": "delta", "ephemeral": True,
+                                            "data": {"kind": kind, "id": stream_id, "text": text}})

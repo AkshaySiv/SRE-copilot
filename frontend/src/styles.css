@@ -191,3 +191,7 @@ table.table { width: 100%; border-collapse: collapse; }
   .page { padding: 16px; }
   .form-grid { grid-template-columns: 1fr; }
 }
+
+.caret { display: inline-block; width: 7px; height: 1em; margin-left: 2px; vertical-align: -2px; background: var(--accent); animation: blink 1s steps(2, start) infinite; }
+@keyframes blink { to { visibility: hidden; } }
+.answer.streaming { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }

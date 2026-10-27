@@ -177,6 +177,7 @@ class InvestigationRunner:
                 action_catalog=catalog(kinds_in_scope) if settings.remediation_mode != "disabled" else [],
                 internal_tools=internal, max_steps=settings.agent_max_steps, tool_timeout=settings.tool_timeout_seconds,
                 tool_output_max_chars=settings.tool_output_max_chars, max_parallel_tools=settings.max_parallel_tools,
+                live=rec.live if settings.stream_responses else None,
             )), timeout=settings.agent_timeout_seconds)
 
             async with sessionmaker()() as s:

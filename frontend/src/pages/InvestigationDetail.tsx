@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import { api, streamInvestigation, timeAgo } from "../api";
 import { useMe } from "../App";
-import type { InvEvent, InvestigationDetail as Detail, Remediation, Report } from "../types";
+import type { InvEvent, InvestigationDetail as Detail, LiveText, Remediation, Report } from "../types";
 import { Empty, ErrorBox, Markdown, RiskPill, Spinner, useAsync } from "../components/ui";
 import { StatusPill } from "./Investigations";
 
@@ -33,7 +33,17 @@ function ToolStep({ call, result }: { call: InvEvent; result?: InvEvent }) {
   );
 }
 
-function Timeline({ events, running }: { events: InvEvent[]; running: boolean }) {
+function LiveBlock({ live }: { live: LiveText }) {
+  if (live.kind === "report") {
+    return <div className="row muted pulse"><Spinner size={14} /> Writing the incident report… {(live.text.length / 1000).toFixed(1)}k characters</div>;
+  }
+  if (live.kind === "answer") {
+    return <div className="answer streaming"><Markdown>{live.text}</Markdown><span className="caret" /></div>;
+  }
+  return <div className="thinking"><Bot size={13} style={{ verticalAlign: -2 }} /> {live.text}<span className="caret" /></div>;
+}
+
+function Timeline({ events, running, live }: { events: InvEvent[]; running: boolean; live: LiveText | null }) {
   const results = useMemo(() => new Map(events.filter((e) => e.type === "tool_result").map((e) => [e.data.id, e])), [events]);
   const lastStatus = [...events].reverse().find((e) => e.type === "status")?.data;
   const lastPhase = lastStatus?.phase;
@@ -66,7 +76,8 @@ function Timeline({ events, running }: { events: InvEvent[]; running: boolean })
           default: return null;
         }
       })}
-      {running && <div className="row muted pulse"><Spinner size={14} /> {PHASES[lastPhase] ?? "Working…"}{lastPhase === "thinking" && lastStatus?.step ? ` (step ${lastStatus.step})` : ""}</div>}
+      {running && live && live.text && <LiveBlock live={live} />}
+      {running && !(live && live.text) && <div className="row muted pulse"><Spinner size={14} /> {PHASES[lastPhase] ?? "Working…"}{lastPhase === "thinking" && lastStatus?.step ? ` (step ${lastStatus.step})` : ""}</div>}
     </div>
   );
 }
@@ -186,6 +197,7 @@ export default function InvestigationDetail() {
   const [rems, setRems] = useState<Remediation[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [running, setRunning] = useState(false);
+  const [live, setLive] = useState<LiveText | null>(null);
   const [followUp, setFollowUp] = useState("");
   const [sendErr, setSendErr] = useState<unknown>();
   const bottom = useRef<HTMLDivElement>(null);
@@ -203,6 +215,8 @@ export default function InvestigationDetail() {
     if (!d || !(d.running || d.status === "queued" || d.status === "running")) return;
     const after = d.events.length ? d.events[d.events.length - 1].seq : 0;
     return streamInvestigation(d.id, Math.max(after, ...events.map((e) => e.seq), 0), (ev) => {
+      if (ev.ephemeral) { setLive(ev.data as LiveText); return; }
+      if (["thinking", "llm_call", "answer", "report", "error", "done", "tool_call"].includes(ev.type)) setLive(null);
       setEvents((prev) => prev.some((p) => p.seq === ev.seq) ? prev : [...prev, ev]);
       if (ev.type === "report") setReport(ev.data.report);
       if (ev.type === "remediation") detail.reload(true);
@@ -212,7 +226,7 @@ export default function InvestigationDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail.data?.id, streamKey]);
 
-  useEffect(() => { if (running) bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [events.length, running]);
+  useEffect(() => { if (running) bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [events.length, running, live?.text.length]);
 
   if (detail.loading && !detail.data) return <div className="page"><Spinner /></div>;
   if (detail.error) return <div className="page"><ErrorBox error={detail.error} /></div>;
@@ -246,7 +260,7 @@ export default function InvestigationDetail() {
       </div>
       <div className={showSide ? "inv-layout" : ""} style={showSide ? {} : { maxWidth: 900, margin: "0 auto" }}>
         <div className="col">
-          <Timeline events={events} running={running} />
+          <Timeline events={events} running={running} live={live} />
           {d.error && !running && <ErrorBox error={d.error} />}
           <div ref={bottom} />
           <div className="composer">

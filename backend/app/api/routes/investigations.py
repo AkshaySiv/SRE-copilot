@@ -121,6 +121,9 @@ async def stream(inv_id: str, request: Request, after: int = 0, session: AsyncSe
                 except asyncio.TimeoutError:
                     yield {"event": "ping", "data": "{}"}
                     continue
+                if ev.get("ephemeral"):  # live token stream: no id, never replayed
+                    yield {"event": "message", "data": json.dumps(ev)}
+                    continue
                 if ev["seq"] <= last:
                     continue
                 last = ev["seq"]

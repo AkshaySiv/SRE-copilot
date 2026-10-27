@@ -40,4 +40,5 @@ class OpenAICompatibleLLM(LLMProvider):
             default_headers=c.extra_headers or None,
             http_async_client=httpx.AsyncClient(verify=verify, timeout=c.timeout_seconds),
             max_retries=2,
+            stream_usage=True,
         )

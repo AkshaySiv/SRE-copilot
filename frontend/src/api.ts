@@ -62,7 +62,7 @@ export function streamInvestigation(id: string, after: number, onEvent: (e: InvE
             const data = chunk.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trimStart()).join("\n");
             if (!data || evType === "ping") continue;
             const ev = JSON.parse(data) as InvEvent;
-            last = Math.max(last, ev.seq);
+            if (ev.seq != null) last = Math.max(last, ev.seq);
             onEvent(ev);
             if (ev.type === "done") finished = true;
           }
