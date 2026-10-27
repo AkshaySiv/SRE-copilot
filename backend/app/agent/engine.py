@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -110,7 +111,11 @@ async def run_investigation(req: RunRequest) -> RunResult:
     usage: dict[str, int] = {}
 
     async def agent_node(state: AgentState):
+        await req.emit("status", {"phase": "thinking", "step": state["steps"] + 1})
+        started = time.monotonic()
         resp = await llm_tools.ainvoke(state["messages"])
+        await req.emit("llm_call", {"step": state["steps"] + 1,
+                                    "duration_ms": int((time.monotonic() - started) * 1000)})
         _usage_add(usage, resp)
         note = text_of(resp).strip()
         if note:

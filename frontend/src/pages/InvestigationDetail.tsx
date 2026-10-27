@@ -12,6 +12,7 @@ import { StatusPill } from "./Investigations";
 const PHASES: Record<string, string> = {
   starting: "Connecting to your integrations…", investigating: "Investigating…",
   writing_report: "Writing the incident report…", writing_answer: "Writing the answer…",
+  thinking: "Waiting for the AI model…",
 };
 
 function ToolStep({ call, result }: { call: InvEvent; result?: InvEvent }) {
@@ -34,7 +35,8 @@ function ToolStep({ call, result }: { call: InvEvent; result?: InvEvent }) {
 
 function Timeline({ events, running }: { events: InvEvent[]; running: boolean }) {
   const results = useMemo(() => new Map(events.filter((e) => e.type === "tool_result").map((e) => [e.data.id, e])), [events]);
-  const lastPhase = [...events].reverse().find((e) => e.type === "status")?.data.phase;
+  const lastStatus = [...events].reverse().find((e) => e.type === "status")?.data;
+  const lastPhase = lastStatus?.phase;
   return (
     <div className="timeline">
       {events.map((e) => {
@@ -49,6 +51,11 @@ function Timeline({ events, running }: { events: InvEvent[]; running: boolean })
               <p className="text-2" style={{ margin: "6px 0 0" }}>{e.data.report?.summary}</p>
             </div>
           );
+          case "llm_call": return (
+            <div key={e.seq} className="muted small" style={{ paddingLeft: 12 }}>
+              Model step {e.data.step} · {(e.data.duration_ms / 1000).toFixed(1)}s
+            </div>
+          );
           case "error": return <ErrorBox key={e.seq} error={e.data.message} />;
           case "done": return (
             <div key={e.seq} className="muted small" style={{ textAlign: "center" }}>
@@ -59,7 +66,7 @@ function Timeline({ events, running }: { events: InvEvent[]; running: boolean })
           default: return null;
         }
       })}
-      {running && <div className="row muted pulse"><Spinner size={14} /> {PHASES[lastPhase] ?? "Working…"}</div>}
+      {running && <div className="row muted pulse"><Spinner size={14} /> {PHASES[lastPhase] ?? "Working…"}{lastPhase === "thinking" && lastStatus?.step ? ` (step ${lastStatus.step})` : ""}</div>}
     </div>
   );
 }
