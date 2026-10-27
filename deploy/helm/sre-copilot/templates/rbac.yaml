@@ -1,0 +1,82 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "sre-copilot.sa" . }}
+  labels: {{- include "sre-copilot.labels" . | nindent 4 }}
+{{- end }}
+{{- if .Values.rbac.create }}
+---
+# Read-only access for investigations. Secrets are deliberately NOT readable.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sre-copilot.fullname" . }}-read
+  labels: {{- include "sre-copilot.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, nodes, pods, pods/log, services, endpoints, persistentvolumeclaims, persistentvolumes, events, serviceaccounts, resourcequotas, limitranges{{ if .Values.rbac.readConfigMaps }}, configmaps{{ end }}]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets, replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list, watch]
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.istio.io, security.istio.io]
+    resources: ["*"]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "sre-copilot.fullname" . }}-read
+  labels: {{- include "sre-copilot.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "sre-copilot.fullname" . }}-read }
+subjects: [{ kind: ServiceAccount, name: {{ include "sre-copilot.sa" . }}, namespace: {{ .Release.Namespace }} }]
+{{- if .Values.rbac.remediation.enabled }}
+---
+# Write access used ONLY by human-approved remediation actions.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sre-copilot.fullname" . }}-remediate
+  labels: {{- include "sre-copilot.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [patch]
+  - apiGroups: [apps]
+    resources: [deployments/scale, statefulsets/scale]
+    verbs: [patch, update]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "sre-copilot.fullname" . }}-remediate
+  labels: {{- include "sre-copilot.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "sre-copilot.fullname" . }}-remediate }
+subjects: [{ kind: ServiceAccount, name: {{ include "sre-copilot.sa" . }}, namespace: {{ .Release.Namespace }} }]
+{{- end }}
+{{- end }}

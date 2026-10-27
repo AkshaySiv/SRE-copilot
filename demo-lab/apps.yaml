@@ -1,0 +1,229 @@
+# Healthy baseline of a small "shop" platform. Apply first, then run ./break.sh to inject incidents.
+# Uses only small public images: nginx, busybox, redis.
+apiVersion: v1
+kind: Namespace
+metadata: { name: shop }
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: payments }
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: platform }
+---
+# ---------------------------------------------------------------- payments
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  namespace: payments
+  annotations: { kubernetes.io/change-cause: "release 2.3.4" }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: payments-api } }
+  template:
+    metadata: { labels: { app: payments-api } }
+    spec:
+      containers:
+        - name: payments-api
+          image: busybox:1.36
+          env:
+            - { name: APP_VERSION, value: "2.3.4" }
+            - { name: DB_HOST, value: postgres-payments }
+            - { name: DB_POOL_SIZE, value: "20" }
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "$(date -Iseconds) INFO payments-api $APP_VERSION starting"
+              echo "$(date -Iseconds) INFO loading configuration from environment"
+              case "$DB_POOL_SIZE" in
+                ''|*[!0-9]*) echo "$(date -Iseconds) ERROR config: invalid value for DB_POOL_SIZE: strconv.Atoi: parsing \"$DB_POOL_SIZE\": invalid syntax"
+                             echo "$(date -Iseconds) FATAL startup aborted: configuration error"; exit 1 ;;
+              esac
+              echo "$(date -Iseconds) INFO connected to $DB_HOST:5432 pool=$DB_POOL_SIZE"
+              mkdir -p /www && echo ok > /www/healthz && echo '{"status":"ok"}' > /www/index.html
+              echo "$(date -Iseconds) INFO listening on :8080"
+              httpd -f -p 8080 -h /www
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 5 }
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: payments-api, namespace: payments }
+spec:
+  selector: { app: payments-api }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: postgres-payments, namespace: payments }
+spec:
+  serviceName: postgres-payments
+  replicas: 1
+  selector: { matchLabels: { app: postgres-payments } }
+  template:
+    metadata: { labels: { app: postgres-payments } }
+    spec:
+      containers:
+        - name: postgres
+          image: busybox:1.36       # stand-in for a database: listens on 5432
+          command: ["sh", "-c", "echo 'database system is ready to accept connections'; mkdir -p /www; httpd -f -p 5432 -h /www"]
+          ports: [{ containerPort: 5432 }]
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql }]
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 1Gi } } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: postgres-payments, namespace: payments }
+spec:
+  selector: { app: postgres-payments }
+  ports: [{ port: 5432, targetPort: 5432 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: ledger-worker, namespace: payments }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: ledger-worker } }
+  template:
+    metadata: { labels: { app: ledger-worker } }
+    spec:
+      containers:
+        - name: ledger-worker
+          image: busybox:1.36
+          env: [{ name: CACHE_MB, value: "20" }]
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "$(date -Iseconds) INFO ledger-worker started, cache=${CACHE_MB}MB"
+              cache=$(head -c $((CACHE_MB*1024*1024)) /dev/zero | tr '\0' 'x')
+              echo "$(date -Iseconds) INFO ledger cache loaded"
+              while true; do echo "$(date -Iseconds) INFO processed settlement batch"; sleep 20; done
+          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 96Mi } }
+---
+# ---------------------------------------------------------------- shop
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: frontend, namespace: shop }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: frontend } }
+  template:
+    metadata: { labels: { app: frontend } }
+    spec:
+      containers:
+        - name: frontend
+          image: busybox:1.36
+          env: [{ name: PAYMENTS_URL, value: "http://payments-api.payments.svc:8080/" }]
+          command: ["sh", "-c"]
+          args:
+            - |
+              mkdir -p /www && echo ok > /www/healthz && httpd -p 8080 -h /www
+              while true; do
+                if wget -q -T 3 -O /dev/null "$PAYMENTS_URL"; then
+                  echo "$(date -Iseconds) INFO POST /checkout 200 upstream payments-api ok"
+                else
+                  echo "$(date -Iseconds) ERROR POST /checkout 503 upstream payments-api.payments.svc:8080 unavailable"
+                fi
+                sleep 5
+              done
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 5 }
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: frontend, namespace: shop }
+spec:
+  selector: { app: frontend }
+  ports: [{ port: 80, targetPort: 8080 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: { name: shop, namespace: shop }
+spec:
+  rules:
+    - host: shop.local
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: frontend, port: { number: 80 } } } }
+          - { path: /checkout, pathType: Prefix, backend: { service: { name: checkout, port: { number: 80 } } } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: checkout, namespace: shop }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: checkout } }
+  template:
+    metadata: { labels: { app: checkout } }
+    spec:
+      containers:
+        - name: checkout
+          image: nginx:1.27-alpine
+          ports: [{ containerPort: 80 }]
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: checkout, namespace: shop }
+spec:
+  selector: { app: checkout }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: cart, namespace: shop }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: cart } }
+  template:
+    metadata: { labels: { app: cart } }
+    spec:
+      containers:
+        - name: cart
+          image: redis:7-alpine
+          ports: [{ containerPort: 6379 }]
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 128Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: cart, namespace: shop }
+spec:
+  selector: { app: cart }
+  ports: [{ port: 6379, targetPort: 6379 }]
+---
+# ---------------------------------------------------------------- platform
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: notifications, namespace: platform }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: notifications } }
+  template:
+    metadata: { labels: { app: notifications } }
+    spec:
+      containers:
+        - name: notifications
+          image: nginx:1.27-alpine
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: report-generator, namespace: platform }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: report-generator } }
+  template:
+    metadata: { labels: { app: report-generator } }
+    spec:
+      containers:
+        - name: report-generator
+          image: busybox:1.36
+          command: ["sh", "-c", "while true; do echo \"$(date -Iseconds) INFO report generated\"; sleep 30; done"]
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 32Mi } }

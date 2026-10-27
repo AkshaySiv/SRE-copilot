@@ -1,0 +1,10 @@
+# kind create cluster --config kind-config.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: sre-lab
+nodes:
+  - role: control-plane
+  - role: worker
+    labels: { tier: apps }
+  - role: worker
+    labels: { tier: apps }

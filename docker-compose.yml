@@ -1,0 +1,37 @@
+# Local / single-host deployment. `docker compose up --build` then open http://localhost:8000
+# The demo cluster and demo monitoring are seeded automatically; add an LLM under Integrations
+# (or uncomment the ollama service for a fully local, air-gapped model).
+services:
+  sre-copilot:
+    build: .
+    image: sre-copilot:latest
+    ports: ["8000:8000"]
+    environment:
+      SRECOPILOT_ENV: production
+      SRECOPILOT_SECRET_KEY: ${SRECOPILOT_SECRET_KEY:?generate one - see README}
+      SRECOPILOT_DATABASE_URL: postgresql+asyncpg://copilot:copilot@postgres:5432/copilot
+      SRECOPILOT_SEED_DEMO: "true"
+      SRECOPILOT_AUTH_MODE: ${SRECOPILOT_AUTH_MODE:-none}
+      SRECOPILOT_AUTH_TOKENS: ${SRECOPILOT_AUTH_TOKENS:-}
+      SRECOPILOT_BOOTSTRAP_FILE: /config/integrations.yaml
+    volumes:
+      - ./deploy/integrations.example.yaml:/config/integrations.yaml:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: copilot, POSTGRES_PASSWORD: copilot, POSTGRES_DB: copilot }
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U copilot"], interval: 5s, retries: 10 }
+    restart: unless-stopped
+
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   volumes: [ollama:/root/.ollama]
+  #   ports: ["11434:11434"]
+
+volumes:
+  pgdata: {}
+  # ollama: {}

@@ -1,0 +1,75 @@
+image:
+  repository: harbor.internal/platform/sre-copilot   # push the image to your private registry for air-gapped installs
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 1          # live event streaming is in-process; scale >1 only with a shared bus (see docs)
+
+config:
+  env: production
+  logLevel: INFO
+  authMode: token        # none | token | header (behind oauth2-proxy)
+  remediationMode: approval
+  agentMaxSteps: 30
+  seedDemo: false
+  databaseUrl: ""        # empty = SQLite on the PVC; or postgresql+asyncpg://...
+  extraEnv: {}
+
+# Secret values. Prefer existingSecret in production (keys: SRECOPILOT_SECRET_KEY, SRECOPILOT_AUTH_TOKENS, ...).
+existingSecret: ""
+secrets:
+  SRECOPILOT_SECRET_KEY: ""      # Fernet key - REQUIRED
+  SRECOPILOT_AUTH_TOKENS: ""     # token:role:name,...
+  # VLLM_API_KEY / ANTHROPIC_API_KEY / VM_SSH_KEY ... referenced as ${VAR} in the bootstrap file
+
+# Integrations seeded at startup (same format as deploy/integrations.example.yaml)
+bootstrap:
+  integrations:
+    - name: this-cluster
+      kind: kubernetes
+      type: cluster
+      default: true
+      config:
+        auth_mode: in_cluster
+        environment: prod
+        allow_remediation: false
+
+rbac:
+  create: true
+  readConfigMaps: true
+  # Grants patch on workloads/nodes and delete on pods. Also set allow_remediation: true on the integration.
+  remediation:
+    enabled: false
+
+serviceAccount:
+  create: true
+  name: ""
+
+persistence:
+  enabled: true
+  size: 2Gi
+  storageClass: ""
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: nginx
+  host: sre-copilot.example.internal
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"      # needed for live investigation streaming
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  tls: []
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 1Gi }
+
+podSecurityContext: { runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001, seccompProfile: { type: RuntimeDefault } }
+securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+nodeSelector: {}
+tolerations: []
+affinity: {}

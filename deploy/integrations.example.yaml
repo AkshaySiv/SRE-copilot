@@ -1,0 +1,78 @@
+# GitOps-style integration config, loaded at startup via SRECOPILOT_BOOTSTRAP_FILE.
+# ${VAR} references are expanded from the environment, so secrets can come from a Kubernetes Secret.
+# Entries here are upserted on every start (marked "bootstrap" in the UI). Everything can also be added in the UI.
+integrations: []
+
+# --- Examples (uncomment and adapt) -----------------------------------------------------------------
+#  - name: vllm-qwen
+#    kind: llm
+#    type: openai_compatible
+#    default: true
+#    config:
+#      base_url: http://vllm.ai.svc:8000/v1
+#      model: Qwen/Qwen2.5-32B-Instruct
+#      api_key: ${VLLM_API_KEY}
+#
+#  - name: claude
+#    kind: llm
+#    type: anthropic
+#    config: { model: claude-sonnet-5-5, api_key: "${ANTHROPIC_API_KEY}" }
+#
+#  - name: prod-rke2
+#    kind: kubernetes
+#    type: cluster
+#    default: true
+#    config:
+#      auth_mode: in_cluster            # the pod's ServiceAccount (see Helm chart RBAC)
+#      environment: prod
+#      namespaces_denylist: [kube-node-lease]
+#      allow_remediation: false          # flip to true + enable rbac.remediation in Helm to allow fixes
+#      extra_kinds:
+#        - { kind: VirtualService, api_version: networking.istio.io/v1beta1, aliases: [vs] }
+#        - { kind: Gateway, api_version: networking.istio.io/v1beta1, aliases: [gw] }
+#
+#  - name: staging-cluster
+#    kind: kubernetes
+#    type: cluster
+#    config:
+#      auth_mode: token
+#      server: https://staging-api.internal:6443
+#      token: ${STAGING_SA_TOKEN}
+#      ca_cert: |
+#        -----BEGIN CERTIFICATE-----
+#        ...
+#
+#  - name: prometheus
+#    kind: monitoring
+#    type: prometheus
+#    config:
+#      url: http://rancher-monitoring-prometheus.cattle-monitoring-system.svc:9090
+#      alertmanager_url: http://rancher-monitoring-alertmanager.cattle-monitoring-system.svc:9093
+#      query_templates:
+#        livekit_room_errors: 'sum(rate(livekit_room_errors_total{{namespace="{namespace}"}}[5m]))'
+#
+#  - name: loki
+#    kind: monitoring
+#    type: loki
+#    config: { url: http://loki-gateway.logging.svc, namespace_label: namespace, pod_label: pod }
+#
+#  - name: db-servers
+#    kind: vm
+#    type: ssh
+#    config:
+#      username: sre-copilot
+#      private_key: ${VM_SSH_KEY}
+#      known_hosts: ${VM_KNOWN_HOSTS}
+#      hosts:
+#        - { name: db-01, address: 10.0.5.11, labels: { role: postgres, env: prod } }
+#        - { name: db-02, address: 10.0.5.12, labels: { role: postgres, env: prod } }
+#      extra_diagnostics:
+#        - id: pg_replication
+#          description: PostgreSQL replication status
+#          command: "psql -U monitor -d postgres -Atc 'select client_addr,state,replay_lag from pg_stat_replication'"
+#      runbooks:
+#        - id: restart_pgbouncer
+#          description: Restart pgbouncer
+#          command: systemctl restart pgbouncer
+#          use_sudo: true
+#      allow_remediation: true

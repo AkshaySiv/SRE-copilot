@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sre-copilot.fullname" . }}
+  labels: {{- include "sre-copilot.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{- include "sre-copilot.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "sre-copilot.selector" . | nindent 8 }}
+      annotations:
+        checksum/bootstrap: {{ toYaml .Values.bootstrap | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "sre-copilot.sa" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: sre-copilot
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          ports: [{ name: http, containerPort: 8000 }]
+          envFrom: [{ secretRef: { name: {{ include "sre-copilot.secret" . }} } }]
+          env:
+            - { name: SRECOPILOT_ENV, value: {{ .Values.config.env | quote }} }
+            - { name: SRECOPILOT_LOG_LEVEL, value: {{ .Values.config.logLevel | quote }} }
+            - { name: SRECOPILOT_AUTH_MODE, value: {{ .Values.config.authMode | quote }} }
+            - { name: SRECOPILOT_REMEDIATION_MODE, value: {{ .Values.config.remediationMode | quote }} }
+            - { name: SRECOPILOT_AGENT_MAX_STEPS, value: {{ .Values.config.agentMaxSteps | quote }} }
+            - { name: SRECOPILOT_SEED_DEMO, value: {{ .Values.config.seedDemo | quote }} }
+            - { name: SRECOPILOT_BOOTSTRAP_FILE, value: /config/integrations.yaml }
+            - { name: SRECOPILOT_CORS_ORIGINS, value: '[]' }
+            {{- if .Values.config.databaseUrl }}
+            - { name: SRECOPILOT_DATABASE_URL, value: {{ .Values.config.databaseUrl | quote }} }
+            {{- end }}
+            {{- range $k, $v := .Values.config.extraEnv }}
+            - { name: {{ $k }}, value: {{ $v | quote }} }
+            {{- end }}
+          readinessProbe: { httpGet: { path: /api/ready, port: http }, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /api/health, port: http }, periodSeconds: 20, failureThreshold: 5 }
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: bootstrap, mountPath: /config, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim: { claimName: {{ include "sre-copilot.fullname" . }}-data }
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - { name: bootstrap, configMap: { name: {{ include "sre-copilot.fullname" . }}-bootstrap } }
+        - { name: tmp, emptyDir: {} }
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sre-copilot.fullname" . }}
+  labels: {{- include "sre-copilot.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector: {{- include "sre-copilot.selector" . | nindent 4 }}
+  ports: [{ name: http, port: {{ .Values.service.port }}, targetPort: http }]
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "sre-copilot.fullname" . }}
+  labels: {{- include "sre-copilot.labels" . | nindent 4 }}
+  annotations: {{- toYaml .Values.ingress.annotations | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- with .Values.ingress.tls }}
+  tls: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: {{ include "sre-copilot.fullname" . }}, port: { name: http } } }
+{{- end }}
