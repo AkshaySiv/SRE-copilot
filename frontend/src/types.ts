@@ -57,7 +57,7 @@ export interface Remediation {
 }
 
 export interface Report {
-  title: string; severity: string; status: string; summary: string; impact: string;
+  title: string; origin_event_id?: string | null; causal_chain?: string[]; severity: string; status: string; summary: string; impact: string;
   root_cause: { description: string; category: string; confidence: number; affected_components: string[] } | null;
   evidence: { source: string; finding: string; detail?: string | null }[];
   timeline: { time: string; event: string }[];
@@ -73,3 +73,15 @@ export interface Investigation {
 }
 
 export interface InvestigationDetail extends Investigation { report: Report | null; events: InvEvent[]; remediations: Remediation[] }
+
+export type LayerId = "change" | "infra" | "k8s" | "dependency" | "app" | "network" | "impact";
+export interface TimelineEvent {
+  id: string; ts: string; last_ts: string | null; layer: LayerId; severity: "info" | "warning" | "critical";
+  title: string; entity: string; source: string; integration: string; kind: string; evidence: string;
+  count: number; estimated: boolean; attrs: Record<string, any>;
+}
+export interface TimelineData {
+  window_start: string; window_end: string; focus: string[]; events: TimelineEvent[]; origin: string | null;
+  chain: string[]; unrelated: string[]; connected_entities: string[]; stats: Record<string, any>; errors: string[];
+  layers: { id: LayerId; name: string; stack: string }[];
+}

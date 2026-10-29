@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     tool_timeout_seconds: int = 60
     tool_output_max_chars: int = 12_000
     max_parallel_tools: int = 4
+    # Time-based investigation: collect + correlate evidence from every layer before the model reasons.
+    timeline_enabled: bool = True
+    timeline_lookback_minutes: int = 60
+    timeline_timeout_seconds: int = 60
+    timeline_max_log_pods: int = 6
     # Stream model output token-by-token to the UI (falls back automatically if a provider can't stream).
     stream_responses: bool = True
 

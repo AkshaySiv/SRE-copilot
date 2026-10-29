@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
 from app.plugins import EmptyArgs, HealthStatus, ToolSpec, register_plugin
 
+from app.timeline.model import TimelineBatch, TimelineQuery
+
 from .base import HttpAuthConfig, MonitoringPlugin, window
+from .timeline_support import log_events
+
+_TS_PREFIX = re.compile(r"^\S*\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}\S*\s+")
 
 
 class LokiConfig(HttpAuthConfig):
@@ -89,6 +95,30 @@ class Loki(MonitoringPlugin):
             return HealthStatus(True, "Loki API reachable")
         except Exception as exc:  # noqa: BLE001
             return HealthStatus(False, f"{type(exc).__name__}: {exc}")
+
+    async def timeline(self, query: TimelineQuery) -> TimelineBatch:
+        c: LokiConfig = self.config
+        batch = TimelineBatch()
+        ns_sel = (f'{c.namespace_label}=~"{"|".join(query.namespaces)}"' if query.namespaces
+                  else f'{c.namespace_label}=~".+"')
+        logql = '{' + ns_sel + '} |~ "(?i)(error|exception|fatal|panic|traceback|critical)"'
+        try:
+            data = await self._get_json("/loki/api/v1/query_range", {
+                "query": logql, "start": int(query.start.timestamp() * 1e9), "end": int(query.end.timestamp() * 1e9),
+                "limit": 1000, "direction": "forward"})
+        except Exception as exc:  # noqa: BLE001
+            batch.errors.append(f"{self.name}: log search failed: {exc}")
+            return batch
+        streams: dict[tuple[str | None, str | None], list] = {}
+        for stream in data["data"]["result"]:
+            lbl = stream.get("stream", {})
+            key = (lbl.get(c.namespace_label), lbl.get(c.pod_label))
+            for ts_ns, line in stream.get("values", []):
+                streams.setdefault(key, []).append(
+                    (datetime.fromtimestamp(int(ts_ns) / 1e9, tz=timezone.utc), _TS_PREFIX.sub("", line, count=1)))
+        for (ns, pod), lines in list(streams.items())[:100]:
+            batch.events.extend(log_events(lines, ns, pod, self.name, f"Loki · {self.name}"))
+        return batch
 
     def tools(self) -> list[ToolSpec]:
         async def search_logs(namespace=None, pod_regex=None, host=None, contains=None, minutes=60, limit=100):

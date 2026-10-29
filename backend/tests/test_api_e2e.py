@@ -79,6 +79,11 @@ async def test_incident_investigation_and_remediation(client):
     assert data["status"] == "completed", data.get("error")
     assert data["severity"] == "critical" and "DB_POOL_SIZE" in data["root_cause"]
 
+    timeline = next(e["data"]["timeline"] for e in data["events"] if e["type"] == "timeline")
+    tl_events = {e["id"]: e for e in timeline["events"]}
+    assert tl_events[timeline["origin"]]["layer"] == "change"
+    assert timeline["stats"]["events"] > 5
+
     results = [e["data"] for e in data["events"] if e["type"] == "tool_result"]
     logs = next(r for r in results if r["tool"] == "get_workload_logs")
     assert "DB_POOL_SIZE" in logs["output"]

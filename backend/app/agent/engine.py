@@ -47,6 +47,7 @@ class RunRequest:
     tool_timeout: int = 60
     tool_output_max_chars: int = 12000
     max_parallel_tools: int = 4
+    timeline: str = ""  # pre-collected, correlated timeline (text form)
     # Fire-and-forget live updates (not persisted): live(kind, stream_id, text_so_far)
     live: Callable[[str, str, str], None] | None = None
 
@@ -78,6 +79,7 @@ def build_system_prompt(req: RunRequest) -> str:
     text = prompts.SYSTEM_PROMPT.format(
         integrations=integrations,
         focus=f"## Focus\n{req.focus}\n" if req.focus else "",
+        timeline=prompts.TIMELINE_SECTION.format(timeline=req.timeline) if req.timeline else "",
         past_incidents=f"## Similar past incidents (may or may not be related)\n{req.past_incidents}\n"
         if req.past_incidents else "",
         now=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),

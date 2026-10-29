@@ -41,6 +41,9 @@ class Recommendation(BaseModel):
 
 class IncidentReport(BaseModel):
     title: str
+    origin_event_id: str | None = Field(None, description="Timeline event id where the incident started")
+    causal_chain: list[str] = Field(default_factory=list,
+                                    description="Timeline event ids from origin to user impact, in causal order")
     severity: Literal["critical", "high", "medium", "low", "info"] = "medium"
     status: Literal["root_cause_identified", "probable_cause", "inconclusive", "no_issue_found"] = "probable_cause"
     summary: str = Field(description="3-5 sentences a non-engineer can understand")

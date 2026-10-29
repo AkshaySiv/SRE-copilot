@@ -19,6 +19,8 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, SecretStr
 
+from app.timeline.model import TimelineBatch, TimelineQuery
+
 
 class PluginKind(StrEnum):
     LLM = "llm"
@@ -76,6 +78,10 @@ class Plugin(ABC):
 
     def tools(self) -> list[ToolSpec]:
         return []
+
+    async def timeline(self, query: TimelineQuery) -> TimelineBatch:
+        """Events and relations for the time-based investigation. Override in integrations that have history."""
+        return TimelineBatch()
 
     def context_hint(self) -> str:
         """Short description injected in the agent prompt so the LLM knows what this integration covers."""

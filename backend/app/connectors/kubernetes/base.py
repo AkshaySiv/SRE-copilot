@@ -17,6 +17,7 @@ import yaml
 from pydantic import BaseModel, Field
 
 from app.plugins import EmptyArgs, HealthStatus, Plugin, PluginKind, ToolSpec
+from app.timeline.model import TimelineBatch, TimelineQuery
 
 from . import model as m
 
@@ -305,6 +306,12 @@ class KubernetesConnector(Plugin):
         body = [{"op": "replace", "path": "/spec/template", "value": template}]
         result = await self._patch(self.kinds.resolve("Deployment"), name, namespace, body, dry_run, patch_type="json")
         return {"rolled_back_to_revision": target["revision"], "images": target["images"], "result": result}
+
+    # ---------------------------------------------------------------- time-based investigation
+    async def timeline(self, query: TimelineQuery) -> TimelineBatch:
+        from .timeline import collect
+
+        return await collect(self, query)
 
     # ---------------------------------------------------------------- plugin API
     async def health(self) -> HealthStatus:

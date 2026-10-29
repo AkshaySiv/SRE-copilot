@@ -67,11 +67,14 @@ class DemoState:
         self.objs[kind].append(obj)
         return obj
 
-    def event(self, ns, kind, name, type_, reason, message, count=1, minutes_ago=1.0):
-        self.add("Event", {"metadata": _meta(f"{name}.{_rand(8)}", ns, minutes_ago=minutes_ago),
-                           "involvedObject": {"kind": kind, "name": name, "namespace": ns},
-                           "type": type_, "reason": reason, "message": message, "count": count,
-                           "lastTimestamp": _ts(minutes_ago)})
+    def event(self, ns, kind, name, type_, reason, message, count=1, minutes_ago=1.0, host=None):
+        ev = {"metadata": _meta(f"{name}.{_rand(8)}", ns, minutes_ago=minutes_ago),
+              "involvedObject": {"kind": kind, "name": name, "namespace": ns},
+              "type": type_, "reason": reason, "message": message, "count": count,
+              "lastTimestamp": _ts(minutes_ago)}
+        if host:
+            ev["source"] = {"component": "kubelet", "host": host}
+        self.add("Event", ev)
 
     def deployment(self, ns, name, containers, replicas=2, revision=1, minutes_ago=60 * 24 * 10, labels=None,
                    history: list[tuple[int, list[dict], float]] | None = None):
@@ -183,8 +186,10 @@ class DemoState:
             "metadata": _meta(pname, ns, labels, minutes_ago, owner=("ReplicaSet", rs_name)),
             "spec": {"nodeName": node, "containers": containers, "volumes": copy.deepcopy(template["spec"].get("volumes", []))},
             "status": {"phase": phase, "podIP": f"10.42.{random.randint(0, 3)}.{random.randint(2, 250)}",
-                       "qosClass": "Burstable", "containerStatuses": statuses,
-                       "conditions": [{"type": "Ready", "status": "False" if broken else "True"}]},
+                       "qosClass": "Burstable", "containerStatuses": statuses, "startTime": _ts(minutes_ago),
+                       "conditions": [{"type": "PodScheduled", "status": "True", "lastTransitionTime": _ts(minutes_ago)},
+                                      {"type": "Ready", "status": "False" if broken else "True",
+                                       "lastTransitionTime": _ts(max(minutes_ago - 0.17, 0))}]},
         })
         return pname
 
@@ -216,9 +221,13 @@ class DemoState:
                                    "status": {"phase": "Active"}})
         for i, (node, extra) in enumerate([("control-plane-1", {"node-role.kubernetes.io/control-plane": "true"}),
                                            ("worker-1", {}), ("worker-2", {}), ("worker-3", {})]):
-            conds = [{"type": "Ready", "status": "True", "reason": "KubeletReady", "message": "kubelet is posting ready status"},
-                     {"type": "MemoryPressure", "status": "False"}, {"type": "PIDPressure", "status": "False"},
+            conds = [{"type": "Ready", "status": "True", "reason": "KubeletReady", "message": "kubelet is posting ready status",
+                      "lastTransitionTime": _ts(60 * 24 * 7)},
+                     {"type": "MemoryPressure", "status": "False", "lastTransitionTime": _ts(60 * 24 * 7)},
+                     {"type": "PIDPressure", "status": "False", "lastTransitionTime": _ts(60 * 24 * 7)},
                      {"type": "DiskPressure", "status": "True" if node == "worker-3" else "False",
+                      "reason": "KubeletHasDiskPressure" if node == "worker-3" else "KubeletHasNoDiskPressure",
+                      "lastTransitionTime": _ts(40) if node == "worker-3" else _ts(60 * 24 * 7),
                       "message": "ephemeral-storage usage 88% exceeds eviction threshold" if node == "worker-3" else ""}]
             self.add("Node", {"metadata": _meta(node, labels={"kubernetes.io/hostname": node, **extra}, minutes_ago=60 * 24 * 120),
                               "spec": {}, "status": {"conditions": conds,
@@ -256,6 +265,9 @@ class DemoState:
         for p in self.objs["Pod"]:
             if m.name_of(p).startswith("payments-api"):
                 p["metadata"]["creationTimestamp"] = _ts(26)
+                p["status"]["startTime"] = _ts(26)
+                for cond in p["status"]["conditions"]:
+                    cond["lastTransitionTime"] = _ts(26) if cond["type"] == "PodScheduled" else _ts(25.83)
         self.deployment("payments", "ledger-worker",
                         [_container("ledger-worker", f"{reg}/payments/ledger-worker:1.9.2", mem_limit="256Mi")], replicas=1)
         self._statefulset("payments", "postgres-payments", "postgres:16.4", 5432, "20Gi")
@@ -281,6 +293,70 @@ class DemoState:
         self.event("shop", "Ingress", "shop", "Normal", "Sync", "Scheduled for sync", 1, 300)
         self.event(None, "Node", "worker-3", "Warning", "EvictionThresholdMet",
                    "Attempting to reclaim ephemeral-storage", 3, 40)
+        self._sre_demo()
+
+    def _sre_demo(self) -> None:
+        """Second scenario, across layers: worker-2's disk fills -> postgres-0 evicted and stuck Pending (local
+        volume) -> backend loses its database and crash-loops -> frontend users get 5xx."""
+        ns, T = "sre-demo", 7.0  # the origin happened T minutes ago
+        self.add("Namespace", {"metadata": _meta(ns, labels={"kubernetes.io/metadata.name": ns}, minutes_ago=60 * 24 * 30),
+                               "status": {"phase": "Active"}})
+        node = next(n for n in self.objs["Node"] if m.name_of(n) == "worker-2")
+        for cond in node["status"]["conditions"]:
+            if cond["type"] == "DiskPressure":
+                cond.update(status="True", reason="KubeletHasDiskPressure", lastTransitionTime=_ts(T),
+                            message="imagefs usage 91% exceeds eviction threshold 85%")
+        self.event(None, "Node", "worker-2", "Warning", "EvictionThresholdMet",
+                   "Attempting to reclaim ephemeral-storage", 2, T - 0.05)
+        # database: evicted, then unschedulable because its local volume lives on worker-2
+        self._statefulset(ns, "postgres", "postgres:16.4", 5432, "10Gi")
+        self._service(ns, "postgres", {"app": "postgres"}, 5432)
+        pg = next(p for p in self.objs["Pod"] if m.ns_of(p) == ns and m.name_of(p) == "postgres-0")
+        pg["metadata"]["creationTimestamp"] = _ts(T - 0.38)
+        pg["spec"].pop("nodeName", None)
+        pg["status"] = {"phase": "Pending", "startTime": _ts(T - 0.38), "conditions": [
+            {"type": "PodScheduled", "status": "False", "reason": "Unschedulable", "lastTransitionTime": _ts(T - 0.39),
+             "message": "0/4 nodes are available: 1 node(s) had untolerated taint {node.kubernetes.io/disk-pressure: }, "
+                        "3 node(s) had volume node affinity conflict."},
+            {"type": "Ready", "status": "False", "lastTransitionTime": _ts(T - 0.40)}]}
+        self.event(ns, "Pod", "postgres-0", "Warning", "Evicted",
+                   "The node was low on resource: ephemeral-storage. Threshold quantity: 4Gi, available: 3.6Gi.", 1, T - 0.37,
+                   host="worker-2")
+        self.event(ns, "Pod", "postgres-0", "Warning", "FailedScheduling",
+                   "0/4 nodes are available: 1 node(s) had untolerated taint {node.kubernetes.io/disk-pressure: }, "
+                   "3 node(s) had volume node affinity conflict.", 14, T - 0.39)
+        # backend: was healthy for days, crash-loops since the database disappeared
+        db_env = {"DATABASE_URL": "postgresql://app@postgres:5432/orders", "LOG_LEVEL": "info"}
+        self.deployment(ns, "backend", [_container("backend", "harbor.internal/platform/sre-demo/backend:1.8.2", env=db_env)],
+                        replicas=2, revision=4, minutes_ago=60 * 24 * 12)
+        self._service(ns, "backend", {"app": "backend"}, 8080)
+        trace = ("{t} INFO  backend 1.8.2 starting\n"
+                 "{t} Traceback (most recent call last):\n"
+                 '  File "/app/main.py", line 42, in <module>\n    db = connect()\n'
+                 '  File "/app/db.py", line 18, in connect\n    return psycopg2.connect(DSN, connect_timeout=5)\n'
+                 'psycopg2.OperationalError: connection to server at "postgres" (10.96.41.7), port 5432 failed: '
+                 "Connection refused\n\tIs the server running on that host and accepting TCP/IP connections?\n")
+        for p in self.objs["Pod"]:
+            if m.ns_of(p) == ns and m.name_of(p).startswith("backend-"):
+                p["metadata"]["creationTimestamp"] = _ts(60 * 24 * 3)
+                p["spec"]["nodeName"] = random.choice(["worker-1", "worker-3"])
+                p["status"].update(startTime=_ts(60 * 24 * 3), conditions=[
+                    {"type": "PodScheduled", "status": "True", "lastTransitionTime": _ts(60 * 24 * 3)},
+                    {"type": "Ready", "status": "False", "lastTransitionTime": _ts(T - 1.25)}])
+                p["status"]["containerStatuses"] = [{
+                    "name": "backend", "ready": False, "restartCount": 7, "image": "harbor.internal/platform/sre-demo/backend:1.8.2",
+                    "state": {"waiting": {"reason": "CrashLoopBackOff", "message": "back-off 2m40s restarting failed container=backend"}},
+                    "lastState": {"terminated": {"reason": "Error", "exitCode": 1, "finishedAt": _ts(0.3)}}}]
+                self.logs[(ns, m.name_of(p))] = {"current": "", "previous": trace.format(t=_ts(0.3))}
+                self.event(ns, "Pod", m.name_of(p), "Warning", "BackOff",
+                           f"Back-off restarting failed container backend in pod {m.name_of(p)}", 26, 0.2)
+        dep = next(d for d in self.objs["Deployment"] if m.ns_of(d) == ns and m.name_of(d) == "backend")
+        dep["status"].update(readyReplicas=0, availableReplicas=0)
+        # frontend: healthy pods, but its users get errors because backend has no endpoints
+        self.deployment(ns, "frontend", [_container("frontend", "harbor.internal/platform/sre-demo/frontend:3.2.0",
+                                                    env={"BACKEND_URL": "http://backend:8080"})], replicas=2, minutes_ago=60 * 24 * 12)
+        self._service(ns, "frontend", {"app": "frontend"}, 8080)
+        self._ingress(ns, "sre-demo", "sre-demo.example.internal", "frontend")
 
     def _statefulset(self, ns, name, image, port, size):
         labels = {"app": name}
@@ -297,7 +373,9 @@ class DemoState:
         self.add("Pod", {"metadata": _meta(pname, ns, labels, 60 * 24 * 5, owner=("StatefulSet", name)),
                          "spec": {"nodeName": "worker-2", "containers": [_container(name, image, port=port)],
                                   "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": pvc_name}}]},
-                         "status": {"phase": "Running", "podIP": "10.42.1.40", "containerStatuses": [
+                         "status": {"phase": "Running", "podIP": "10.42.1.40", "startTime": _ts(60 * 24 * 5),
+                                    "conditions": [{"type": "Ready", "status": "True", "lastTransitionTime": _ts(60 * 24 * 5)}],
+                                    "containerStatuses": [
                              {"name": name, "ready": True, "restartCount": 0, "image": image,
                               "state": {"running": {"startedAt": _ts(60 * 24 * 5)}}}]}})
         self.logs[(ns, pname)] = {"current": self._healthy_logs(name, image.split(":")[-1], ns), "previous": ""}

@@ -6,9 +6,11 @@ from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 
 from app.plugins import EmptyArgs, HealthStatus, Plugin, PluginKind, ToolSpec, register_plugin
+from app.timeline.model import TimelineBatch, TimelineEvent, TimelineQuery
 
 from .loki import SearchArgs
 from .prometheus import DEFAULT_TEMPLATES, RangeArgs, TemplateArgs
+from .timeline_support import alert_event
 
 
 class DemoMonitoringConfig(BaseModel):
@@ -44,6 +46,54 @@ class DemoMonitoring(Plugin):
 
     async def health(self) -> HealthStatus:
         return HealthStatus(True, "Simulated metrics and logs available")
+
+    async def timeline(self, query: TimelineQuery) -> TimelineBatch:
+        now = datetime.now(timezone.utc)
+        ago = lambda minutes: now - timedelta(minutes=minutes)  # noqa: E731
+        src = f"Prometheus (simulated) · {self.name}"
+        ev = [
+            TimelineEvent(ts=ago(25), layer="impact", severity="critical", entity="Deployment/shop/frontend",
+                          title="frontend: 5xx error rate rose to 41% (from 0%)", source=src, integration=self.name,
+                          kind="signal:http_5xx_ratio", attrs={"norm": "http_5xx_ratio"},
+                          evidence='sum(rate(istio_requests_total{destination_workload="frontend",response_code=~"5.."}[2m]))\n'
+                                   '  / sum(rate(istio_requests_total{destination_workload="frontend"}[2m]))\n'
+                                   f"before onset  0%\nat onset      41%  ({ago(25):%H:%M:%S})\npeak          44%"),
+            TimelineEvent(ts=ago(24), last_ts=ago(1), layer="app", severity="warning", entity="Pod/shop/frontend-7c9d8f6b5-k2x4z",
+                          title="frontend: POST /checkout 503 upstream payments-api.payments.svc:8080: no healthy upstream",
+                          source=f"Loki (simulated) · {self.name}", integration=self.name, kind="log_error", count=96,
+                          attrs={"norm": "frontend-503", "group": "Deployment/shop/frontend"},
+                          evidence="frontend · centralised logs\nERROR POST /checkout 503 upstream "
+                                   "payments-api.payments.svc:8080: no healthy upstream"),
+        ]
+        ev += [
+            TimelineEvent(ts=ago(5.5), layer="impact", severity="critical", entity="Deployment/sre-demo/frontend",
+                          title="frontend: 5xx error rate rose to 63% (from 0%)", source=src, integration=self.name,
+                          kind="signal:http_5xx_ratio", attrs={"norm": "http_5xx_ratio"},
+                          evidence='sum(rate(istio_requests_total{destination_workload="frontend",destination_workload_namespace="sre-demo",response_code=~"5.."}[2m]))\n'
+                                   '  / sum(rate(istio_requests_total{destination_workload="frontend",destination_workload_namespace="sre-demo"}[2m]))\n'
+                                   f"before onset  0%\nat onset      63%  ({ago(5.5):%H:%M:%S})\npeak          66%"),
+            TimelineEvent(ts=ago(5.7), last_ts=ago(0.2), layer="network", severity="warning", entity="Deployment/sre-demo/frontend",
+                          title="frontend → backend: 503 UH no healthy upstream (Envoy)", source=f"Loki (simulated) · {self.name}",
+                          integration=self.name, kind="log_error", count=412, attrs={"norm": "envoy-uh"},
+                          evidence='[istio-proxy] "GET /api/orders HTTP/1.1" 503 UH no_healthy_upstream - "-" 0 19 0 - '
+                                   '"10.244.1.17" outbound|8080||backend.sre-demo.svc.cluster.local'),
+        ]
+        alerts = [
+            (4.5, "KubePodCrashLooping", "critical", {"namespace": "sre-demo", "deployment": "backend"},
+             "Pod sre-demo/backend is crash looping"),
+            (22, "KubePodCrashLooping", "critical", {"namespace": "payments", "deployment": "payments-api"},
+             "Pod payments/payments-api is crash looping"),
+            (20, "HighCheckoutErrorRate", "critical", {"namespace": "shop", "deployment": "frontend"}, "Checkout 5xx ratio is 41%"),
+            (15, "KubeDeploymentReplicasMismatch", "warning", {"namespace": "payments", "deployment": "payments-api"},
+             "Deployment payments/payments-api has 0/2 replicas available"),
+            (14, "KubeContainerOOMKilled", "warning", {"namespace": "payments", "deployment": "ledger-worker"},
+             "ledger-worker OOMKilled 6 times in 1h"),
+            (40, "NodeFilesystemSpaceFillingUp", "warning", {"node": "worker-3"}, "worker-3 root filesystem 88% full"),
+        ]
+        for minutes, name, sev, labels, summary in alerts:
+            ev.append(alert_event(name, {**labels, "severity": sev}, ago(minutes), summary, self.name,
+                                  f"Alertmanager (simulated) · {self.name}"))
+        return TimelineBatch(events=ev)
 
     def tools(self) -> list[ToolSpec]:
         async def get_alerts():

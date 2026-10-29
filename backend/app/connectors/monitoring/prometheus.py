@@ -1,6 +1,7 @@
 """Prometheus-compatible metrics (Prometheus, Thanos, Mimir, VictoriaMetrics, Cortex) + optional Alertmanager."""
 from __future__ import annotations
 
+import asyncio
 import statistics
 from typing import Any
 
@@ -8,7 +9,11 @@ from pydantic import BaseModel, Field
 
 from app.plugins import EmptyArgs, HealthStatus, ToolSpec, register_plugin
 
+from app.timeline.logparse import parse_ts
+from app.timeline.model import TimelineBatch, TimelineQuery
+
 from .base import HttpAuthConfig, MonitoringPlugin, auto_step, window
+from .timeline_support import DEFAULT_SIGNALS, TimelineSignal, alert_event, onset_events
 
 # Query templates are configuration, not code: override or extend them per integration to match your
 # exporters / recording rules. Placeholders: {namespace}, {pod}, {workload}, {service}, {instance}.
@@ -37,6 +42,10 @@ class PrometheusConfig(HttpAuthConfig):
     alertmanager_url: str | None = Field(None, description="If set, alerts are read from Alertmanager (silences aware)")
     query_templates: dict[str, str] = Field(default_factory=dict, description="Extra/overriding PromQL templates")
     max_series: int = Field(30, description="Cap on series returned to the LLM per query")
+    timeline_alerts: bool = Field(True, description="Put firing alerts on the investigation timeline")
+    timeline_signals: list[TimelineSignal] = Field(
+        default_factory=lambda: [s.model_copy() for s in DEFAULT_SIGNALS],
+        description="Metrics that mark a timeline event when they cross a threshold (edit to match your exporters)")
 
 
 class InstantArgs(BaseModel):
@@ -124,6 +133,35 @@ class Prometheus(MonitoringPlugin):
                 return HealthStatus(True, "Prometheus-compatible query API reachable")
             except Exception as exc:  # noqa: BLE001
                 return HealthStatus(False, f"{type(exc).__name__}: {exc}")
+
+    async def timeline(self, query: TimelineQuery) -> TimelineBatch:
+        batch = TimelineBatch()
+        start, end = query.start, query.end
+        minutes = max(int((end - start).total_seconds() // 60), 5)
+        step = auto_step(minutes, points=120)
+
+        async def signal(sig: TimelineSignal):
+            data = await self._get_json("/api/v1/query_range", {"query": sig.query, "start": start.timestamp(),
+                                                                 "end": end.timestamp(), "step": step})
+            return onset_events(sig, data["data"]["result"], self.name, f"Prometheus · {self.name} · {sig.name}")
+
+        tasks = [signal(s) for s in self.config.timeline_signals]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for sig, res in zip(self.config.timeline_signals, results):
+            if isinstance(res, Exception):
+                batch.errors.append(f"{self.name}: signal {sig.name} failed: {res}")
+            else:
+                batch.events.extend(res)
+        if self.config.timeline_alerts:
+            try:
+                for a in await self.alerts():
+                    since = parse_ts(a.get("since"))
+                    if since and since <= end:
+                        batch.events.append(alert_event(a.get("name") or "alert", a.get("labels") or {}, since,
+                                                        a.get("summary") or "", self.name, f"Alerts · {self.name}"))
+            except Exception as exc:  # noqa: BLE001
+                batch.errors.append(f"{self.name}: alerts unavailable: {exc}")
+        return batch
 
     def tools(self) -> list[ToolSpec]:
         async def get_alerts():

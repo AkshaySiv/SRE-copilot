@@ -8,7 +8,10 @@ from pydantic import BaseModel, Field, SecretStr
 
 from app.plugins import EmptyArgs, HealthStatus, Plugin, PluginKind, ToolSpec, register_plugin
 
-from .catalog import BUILTIN_DIAGNOSTICS, BUILTIN_RUNBOOKS, CommandSpec
+from app.timeline.model import TimelineBatch, TimelineQuery, entity_id
+
+from .catalog import BUILTIN_DIAGNOSTICS, BUILTIN_RUNBOOKS, DISK_NOW, JOURNAL_WINDOW, CommandSpec
+from .timeline import disk_events, journal_events
 
 
 class HostConfig(BaseModel):
@@ -16,6 +19,7 @@ class HostConfig(BaseModel):
     address: str = Field(description="IP or DNS name")
     port: int = 22
     labels: dict[str, str] = Field(default_factory=dict, description="e.g. role=db, env=prod")
+    k8s_node: str | None = Field(None, description="Kubernetes node name if this VM is a cluster node (links the layers)")
     username: str | None = Field(None, description="Overrides the integration-wide username")
 
 
@@ -36,6 +40,8 @@ class SSHConfig(BaseModel):
                                         description="Write commands usable only as approved remediations")
     disable_builtin_runbooks: bool = False
     allow_remediation: bool = False
+    timeline_enabled: bool = Field(True, description="Read journal warnings and disk usage for time-based investigations")
+    timeline_max_hosts: int = Field(10, ge=1, le=50)
 
 
 class HostsArgs(BaseModel):
@@ -167,6 +173,35 @@ class SSHVirtualMachines(Plugin):
     def context_hint(self) -> str:
         hosts = ", ".join(f"{h.name}({','.join(f'{k}={v}' for k, v in h.labels.items())})" for h in self.config.hosts[:30])
         return f"Linux VMs over SSH: {hosts or 'none configured'}"
+
+    async def timeline(self, query: TimelineQuery) -> TimelineBatch:
+        batch = TimelineBatch()
+        if not self.config.timeline_enabled or not self.config.hosts:
+            return batch
+        since, until = str(int(query.start.timestamp())), str(int(query.end.timestamp()))
+
+        async def one(h: HostConfig):
+            ent = entity_id("Node", None, h.k8s_node or h.name)
+            journal = await self.execute(h, JOURNAL_WINDOW.render({"since": since, "until": until}),
+                                         JOURNAL_WINDOW.timeout_seconds)
+            disk = await self.execute(h, DISK_NOW.render({}), DISK_NOW.timeout_seconds)
+            out = []
+            if "error" in journal:
+                batch.errors.append(f"{self.name}: journal on {h.name}: {journal['error']}")
+            else:
+                out += journal_events(journal.get("stdout", ""), h.name, ent, self.name)
+            if "error" not in disk:
+                out += disk_events(disk.get("stdout", ""), h.name, ent, self.name)
+            return out
+
+        results = await asyncio.gather(*(one(h) for h in self.config.hosts[: self.config.timeline_max_hosts]),
+                                       return_exceptions=True)
+        for res in results:
+            if isinstance(res, Exception):
+                batch.errors.append(f"{self.name}: {res}")
+            else:
+                batch.events.extend(res)
+        return batch
 
     def tools(self) -> list[ToolSpec]:
         async def list_hosts(selector: str | None = None):

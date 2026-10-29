@@ -22,6 +22,31 @@ Nobody needs to know `kubectl`, PromQL or shell commands.
   CDNs in the UI, images can be mirrored to Harbor.
 - **Institutional memory** — past incidents and the fixes that worked are searched and fed into new investigations.
 
+## Time-based investigation (how incidents are investigated)
+
+Every incident investigation is built around **one timeline across every technology layer**:
+
+| Layer | What is collected |
+|---|---|
+| Change | Rollouts with the exact pod-template diff between revisions (image, env, resources, probes) |
+| Infra | Node conditions and node events; with VM integrations, journal warnings and disk usage |
+| Kubernetes | Events, container exits / OOM kills (first failure estimated from restarts + back-off), scheduling failures |
+| Dependency | Datastore Services (postgres, redis, kafka…) losing their endpoints |
+| Application | Error lines and **stack traces** (Python, Java, Go, Node.js) from pod logs, Loki or Elasticsearch |
+| Network | Services losing ready endpoints, mesh errors |
+| Impact | Error-rate onset from Prometheus, firing alerts |
+
+1. **Scope**: the resource you asked about (from the cluster map, a `ns/name` in the prompt, or the most severe failure).
+2. **Collect**: every integration returns timestamped events and dependency relations, in parallel, with no LLM.
+3. **Correlate**: duplicates are merged (the same failure on several pods becomes one event ×N), resources connected
+   to the problem are found through the dependency graph, and the **origin** and **causal chain** are proposed from
+   timing and dependencies. Events on unconnected resources are listed as *unrelated*.
+4. **Review**: the model gets the ready-made timeline, verifies or corrects the chain, and uses tools only to fill gaps.
+5. **Report**: swimlane timeline, event log, evidence per event, causal chain, root cause and ordered fixes.
+
+The demo cluster includes two incidents to try it on: a bad release in `payments`, and a full node disk in `sre-demo`
+that evicts the database and breaks the backend two layers above it.
+
 ## Quick start (2 minutes, no infrastructure)
 
 The demo cluster simulates an RKE2 cluster with a real-looking incident: a bad `payments-api` release
@@ -101,6 +126,7 @@ All server settings are environment variables prefixed `SRECOPILOT_` — see `ba
 | `BOOTSTRAP_FILE` | | YAML of integrations to upsert at startup (see `deploy/integrations.example.yaml`). |
 | `PLUGIN_MODULES` | `[]` | Extra Python modules to import, for your own plugins/actions. |
 | `AGENT_MAX_STEPS` / `AGENT_TIMEOUT_SECONDS` | 30 / 900 | Investigation budget. |
+| `TIMELINE_ENABLED` / `TIMELINE_LOOKBACK_MINUTES` | `true` / 60 | Time-based collection and correlation before the model reasons. |
 | `STREAM_RESPONSES` | `true` | Stream model output token-by-token into the investigation timeline. |
 
 **Roles:** viewers browse and investigate; operators also dry-run/approve/reject remediations and see the audit

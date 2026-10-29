@@ -97,6 +97,15 @@ BUILTIN_DIAGNOSTICS: list[CommandSpec] = [
                 params=[CommandParam(name="path", pattern=r"^/[A-Za-z0-9._/-]{1,200}\.(crt|pem|cert)$")]),
 ]
 
+# Used by the time-based investigation (not offered to the agent as a free tool).
+JOURNAL_WINDOW = CommandSpec(
+    id="journal_window", description="Warning-and-above journal entries in a time window",
+    command="journalctl --since @{since} --until @{until} -p warning --no-pager -o short-iso-precise -n 400 2>/dev/null"
+            " || journalctl --since @{since} --until @{until} -p warning --no-pager -o short-iso -n 400",
+    params=[CommandParam(name="since", pattern=r"^[0-9]{9,11}$"), CommandParam(name="until", pattern=r"^[0-9]{9,11}$")],
+    timeout_seconds=45)
+DISK_NOW = CommandSpec(id="disk_now", description="Filesystem usage", command="df -P -x tmpfs -x devtmpfs -x overlay")
+
 BUILTIN_RUNBOOKS: list[CommandSpec] = [
     CommandSpec(id="restart_service", description="Restart a systemd service", mode="write", use_sudo=True,
                 command="systemctl restart {unit} && systemctl is-active {unit}", params=[_UNIT], timeout_seconds=90),

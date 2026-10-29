@@ -5,7 +5,8 @@ import {
 } from "lucide-react";
 import { api, streamInvestigation, timeAgo } from "../api";
 import { useMe } from "../App";
-import type { InvEvent, InvestigationDetail as Detail, LiveText, Remediation, Report } from "../types";
+import type { InvEvent, InvestigationDetail as Detail, LiveText, Remediation, Report, TimelineData } from "../types";
+import { EventLog, EvidencePanel, PhaseStrip, Swimlanes, TimelineVerdict, derive } from "../components/TimelineView";
 import { Empty, ErrorBox, Markdown, RiskPill, Spinner, useAsync } from "../components/ui";
 import { StatusPill } from "./Investigations";
 
@@ -13,6 +14,7 @@ const PHASES: Record<string, string> = {
   starting: "Connecting to your integrations…", investigating: "Investigating…",
   writing_report: "Writing the incident report…", writing_answer: "Writing the answer…",
   thinking: "Waiting for the AI model…",
+  collecting: "Collecting evidence from every layer…", scoped: "Collecting evidence from every layer…",
 };
 
 function ToolStep({ call, result }: { call: InvEvent; result?: InvEvent }) {
@@ -134,12 +136,12 @@ function RemediationCard({ rem, onChange }: { rem: Remediation; onChange: (r: Re
   );
 }
 
-function ReportPanel({ report, remediations, onRemChange }: { report: Report; remediations: Remediation[]; onRemChange: (r: Remediation) => void }) {
+function ReportPanel({ report, remediations, onRemChange, sticky = true }: { report: Report; remediations: Remediation[]; onRemChange: (r: Remediation) => void; sticky?: boolean }) {
   const remByTitle = new Map(remediations.map((r) => [r.title, r]));
   const orphan = remediations.filter((r) => !report.recommendations.some((x) => x.title === r.title));
   const rc = report.root_cause;
   return (
-    <div className="panel" style={{ position: "sticky", top: 16 }}>
+    <div className="panel" style={sticky ? { position: "sticky", top: 16 } : {}}>
       <div className="report-section">
         <div className="row"><span className={`sev-${report.severity}`} style={{ fontWeight: 700, textTransform: "uppercase", fontSize: 12 }}>{report.severity}</span>
           <span className="muted small">· {report.status.replace(/_/g, " ")}</span></div>
@@ -202,6 +204,8 @@ export default function InvestigationDetail() {
   const [sendErr, setSendErr] = useState<unknown>();
   const bottom = useRef<HTMLDivElement>(null);
   const [streamKey, setStreamKey] = useState(0);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [showSteps, setShowSteps] = useState(false);
 
   useEffect(() => {
     const d = detail.data;
@@ -240,6 +244,13 @@ export default function InvestigationDetail() {
     if (running && following && box) box.scrollTop = box.scrollHeight;
   }, [events.length, running, live?.text.length, following]);
 
+  const timeline: TimelineData | null = useMemo(() => {
+    const ev = [...events].reverse().find((e) => e.type === "timeline");
+    return ev ? (ev.data.timeline as TimelineData) : null;
+  }, [events]);
+  const derived = useMemo(() => (timeline ? derive(timeline, report) : null), [timeline, report]);
+  const activeSel = selected ?? derived?.origin ?? null;
+
   if (detail.loading && !detail.data) return <div className="page"><Spinner /></div>;
   if (detail.error) return <div className="page"><ErrorBox error={detail.error} /></div>;
   const d = detail.data!;
@@ -270,6 +281,40 @@ export default function InvestigationDetail() {
         </div>
         {running && <button className="btn danger" onClick={() => api(`/investigations/${d.id}/cancel`, { body: {} })}><Square size={13} /> Stop</button>}
       </div>
+      {timeline && derived ? (
+        <div className="col" style={{ gap: 16 }}>
+          <PhaseStrip phases={phases(events, timeline, report, running)} />
+          <TimelineVerdict tl={timeline} d={derived} report={report} running={running} selected={activeSel} onSelect={setSelected} />
+          <Swimlanes tl={timeline} d={derived} selected={activeSel} onSelect={setSelected} />
+          <div className="inv-layout">
+            <div className="col" style={{ gap: 16, minWidth: 0 }}>
+              <EventLog tl={timeline} d={derived} selected={activeSel} onSelect={setSelected} />
+              <div className="panel">
+                <button className="steps-toggle" onClick={() => setShowSteps(!showSteps)} aria-expanded={showSteps}>
+                  <b>Model reasoning, checks &amp; follow-ups</b>
+                  <span className="muted small">{events.filter((e) => e.type === "tool_call").length} checks · {showSteps || running ? "hide" : "show"}</span>
+                </button>
+                {(showSteps || running) && <div className="panel-pad" style={{ paddingTop: 0 }}><Timeline events={events} running={running} live={live} /></div>}
+              </div>
+              {d.error && !running && <ErrorBox error={d.error} />}
+              <div ref={bottom} />
+              <div className="composer">
+                <form className="ask-inner" onSubmit={(e) => { e.preventDefault(); if (followUp.trim() && !running) send(); }}>
+                  <input className="input" disabled={running} placeholder={running ? "The copilot is working…" : "Ask a follow-up question…"} value={followUp} onChange={(e) => setFollowUp(e.target.value)} />
+                  <button className="btn primary" disabled={running || !followUp.trim()}><Send size={14} /> Send</button>
+                </form>
+                <ErrorBox error={sendErr} />
+              </div>
+            </div>
+            <div className="col" style={{ gap: 16, minWidth: 0 }}>
+              <EvidencePanel tl={timeline} d={derived} selected={activeSel} onAsk={(t) => { setFollowUp(t); setShowSteps(true); }} />
+              {report ? <ReportPanel report={report} remediations={rems} onRemChange={updateRem} sticky={false} />
+                : <div className="panel"><Empty>{running ? <><Spinner /><div style={{ marginTop: 8 }}>The model is reviewing the timeline — the report and fixes appear here.</div></> : "No report."}</Empty></div>}
+              <div className="row small muted" style={{ gap: 6 }}><ShieldCheck size={14} /> Read-only investigation. Fixes run only after a dry-run and your approval.</div>
+            </div>
+          </div>
+        </div>
+      ) : (
       <div className={showSide ? "inv-layout" : ""} style={showSide ? {} : { maxWidth: 900, margin: "0 auto" }}>
         <div className="col">
           <Timeline events={events} running={running} live={live} />
@@ -302,6 +347,19 @@ export default function InvestigationDetail() {
           </div>
         )}
       </div>
+      )}
     </div>
   );
+}
+
+function phases(events: InvEvent[], tl: TimelineData, report: Report | null, running: boolean) {
+  const steps = events.filter((e) => e.type === "llm_call").length;
+  const done = !running || !!report;
+  const focus = tl.focus.map((f) => f.split("/").slice(-1)[0]).slice(0, 2).join(", ") || "whole scope";
+  return [
+    { name: "Scoped", detail: `focus: ${focus}`, state: "done" as const },
+    { name: "Collected", detail: `${tl.stats.raw_signals ?? 0} signals · ${(tl.stats.integrations_queried ?? []).length} integrations · ${(tl.stats.collect_seconds ?? 0) < 1 ? "<1" : tl.stats.collect_seconds} s`, state: "done" as const },
+    { name: "Correlated", detail: tl.origin ? `origin on ${tl.layers.find((l) => l.id === tl.events.find((e) => e.id === tl.origin)?.layer)?.name ?? "?"} layer` : "no clear origin", state: "done" as const },
+    { name: "Reviewed by model", detail: report ? `chain ${report.causal_chain?.length ? "confirmed" : "reviewed"} · ${steps} step${steps === 1 ? "" : "s"}` : `${steps} step${steps === 1 ? "" : "s"} so far`, state: done ? "done" as const : "active" as const },
+  ];
 }

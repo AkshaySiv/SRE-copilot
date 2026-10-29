@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
 from app.plugins import HealthStatus, ToolSpec, register_plugin
 
+from app.timeline.logparse import parse_ts
+from app.timeline.model import TimelineBatch, TimelineQuery
+
 from .base import HttpAuthConfig, MonitoringPlugin, window
 from .loki import _NUM
+from .timeline_support import log_events
 
 
 class ElasticConfig(HttpAuthConfig):
@@ -81,6 +86,28 @@ class Elasticsearch(MonitoringPlugin):
             return HealthStatus(data.get("status") in ("green", "yellow"), f"cluster status {data.get('status')}")
         except Exception as exc:  # noqa: BLE001
             return HealthStatus(False, f"{type(exc).__name__}: {exc}")
+
+    async def timeline(self, query: TimelineQuery) -> TimelineBatch:
+        batch = TimelineBatch()
+        minutes = max(int((datetime.now(timezone.utc) - query.start).total_seconds() // 60), 1)
+        groups: dict[tuple[str | None, str | None], list] = {}
+        namespaces = query.namespaces or [None]
+        for ns in namespaces[:10]:
+            try:
+                res = await self.search(namespace=ns, query="error OR exception OR fatal OR panic OR traceback",
+                                        minutes=minutes, limit=500)
+            except Exception as exc:  # noqa: BLE001
+                batch.errors.append(f"{self.name}: log search failed: {exc}")
+                return batch
+            for line in res["lines"]:
+                ts_raw, _, rest = line.partition(" [")
+                src, _, msg = rest.partition("] ")
+                ts = parse_ts(ts_raw)
+                if ts and ts <= query.end:
+                    groups.setdefault((ns, src or None), []).append((ts, msg))
+        for (ns, pod), lines in list(groups.items())[:100]:
+            batch.events.extend(log_events(lines, ns, pod, self.name, f"Elasticsearch · {self.name}"))
+        return batch
 
     def tools(self) -> list[ToolSpec]:
         async def search_logs(namespace=None, pod_prefix=None, host=None, query=None, minutes=60, limit=100):

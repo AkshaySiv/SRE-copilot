@@ -17,6 +17,8 @@ from app.db.models import Investigation, InvestigationEvent, Remediation
 from app.db.session import sessionmaker
 from app.plugins import ToolSpec
 from app.remediation.base import ACTIONS, catalog
+from app.timeline import to_text
+from app.timeline.service import build_timeline
 
 from .events import EventRecorder
 from .integrations import pool, resolve_scope
@@ -171,13 +173,27 @@ class InvestigationRunner:
             kinds_in_scope = {str(p.kind) for p in plugins}
             effective_mode = "question" if (mode == "question" or is_followup) else "incident"
 
+            timeline_text = ""
+            if effective_mode == "incident" and settings.timeline_enabled and plugins:
+                await rec.emit("status", {"phase": "collecting"})
+                try:
+                    tl = await build_timeline(
+                        plugins, prompt, scope, lookback_minutes=settings.timeline_lookback_minutes,
+                        timeout=settings.timeline_timeout_seconds, max_log_pods=settings.timeline_max_log_pods,
+                        progress=rec.emit)
+                    await rec.emit("timeline", {"timeline": tl.model_dump(mode="json")})
+                    timeline_text = to_text(tl)
+                except Exception as exc:  # noqa: BLE001 - fall back to the classic investigation
+                    log.exception("Timeline build failed for %s", inv_id)
+                    await rec.emit("thinking", {"text": f"Timeline collection failed ({exc}); investigating step by step."})
+
             result = await asyncio.wait_for(run_investigation(RunRequest(
                 mode=effective_mode, prompt=prompt, llm=llm_plugin.chat_model(), plugins=plugins, emit=rec.emit,
                 history=await self._history(inv_id), focus=_focus(scope), past_incidents=past_text,
                 action_catalog=catalog(kinds_in_scope) if settings.remediation_mode != "disabled" else [],
                 internal_tools=internal, max_steps=settings.agent_max_steps, tool_timeout=settings.tool_timeout_seconds,
                 tool_output_max_chars=settings.tool_output_max_chars, max_parallel_tools=settings.max_parallel_tools,
-                live=rec.live if settings.stream_responses else None,
+                live=rec.live if settings.stream_responses else None, timeline=timeline_text,
             )), timeout=settings.agent_timeout_seconds)
 
             async with sessionmaker()() as s:

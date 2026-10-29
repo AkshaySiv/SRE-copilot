@@ -25,6 +25,7 @@ of people who may NOT know Linux or Kubernetes. You have read-only tools across 
 {integrations}
 
 {focus}
+{timeline}
 {past_incidents}
 Current time (UTC): {now}
 """
@@ -38,6 +39,10 @@ Rules:
 - `summary` and `impact`: plain language for a non-engineer; no jargon without explanation.
 - `evidence`: only things you actually observed through tools, with the source and a short excerpt.
 - `root_cause.confidence`: 0.9+ only with direct evidence (e.g. an explicit error message plus a correlated change).
+- If a pre-collected timeline was provided: set `origin_event_id` to the id of the event where the incident
+  started and `causal_chain` to the ids from the origin to user impact in causal order (only ids that exist in the
+  timeline; correct the proposed chain if your investigation showed otherwise). Leave `timeline` empty then - the
+  UI already shows the collected one.
 - `recommendations`: ordered by priority. Put the immediate fix first, then follow-ups and prevention.
 - `automated_action`: set it ONLY when one of these catalogued actions directly fixes or mitigates the problem,
   using an exact action id, an integration NAME from the scope and params valid for its schema. Otherwise null.
@@ -45,6 +50,17 @@ Rules:
   a restart does not fix bad configuration).
 Remediation catalog:
 {actions}
+"""
+
+TIMELINE_SECTION = """## Pre-collected timeline (all layers, UTC)
+Evidence from every integration was already collected and correlated into the timeline below. Event ids are in
+[brackets]. ORIGIN and CHAIN# are a deterministic proposal from timing and dependencies - treat it as a hypothesis:
+  * check each step really explains the next one, and look for an earlier or deeper cause;
+  * "~estimated" times are inferred (e.g. first crash derived from restart count) - weigh them accordingly;
+  * use tools only to fill gaps (read a config, confirm a dependency, check a log line); do not re-collect what
+    the timeline already shows;
+  * events marked UNRELATED are on resources not connected to the problem - mention them only as side findings.
+{timeline}
 """
 
 QUESTION_GUIDANCE = """The user is asking a question rather than reporting an incident. Investigate only as much as \
