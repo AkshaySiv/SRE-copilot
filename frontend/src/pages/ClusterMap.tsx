@@ -10,6 +10,7 @@ import { api } from "../api";
 import { startInvestigation } from "../lib";
 import type { ClusterRef, KEvent, Overview, ResourceDetail, ResourceSummary, Topology } from "../types";
 import { Empty, ErrorBox, HealthDot, HealthPill, KIND_SHORT, KindIcon, Spinner, useAsync } from "../components/ui";
+import { WhyPanel } from "../components/Insights";
 
 const NODE_W = 210;
 const NODE_H = 66;
@@ -112,7 +113,10 @@ function ResourceDrawer({ clusterId, node, onClose }: { clusterId: string; node:
             <Sparkles size={15} /> Explain it
           </button>
         </div>
-        {node.reasons.length > 0 && (
+        {!isRef && (node.health !== "healthy" || node.kind === "Service") && (
+          <WhyPanel key={`${node.kind}/${ns}/${node.name}`} clusterId={clusterId} kind={node.kind} name={node.name} namespace={ns} health={node.health} reasons={node.reasons} />
+        )}
+        {isRef && node.reasons.length > 0 && (
           <div className="panel panel-pad" style={{ marginBottom: 14, borderColor: `var(--${node.health})` }}>
             <b className="small">Why it is {node.health}</b>
             <ul className="kbd-list small">{node.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>

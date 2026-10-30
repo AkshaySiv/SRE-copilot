@@ -151,3 +151,26 @@ async def test_integration_secrets_are_masked_and_kept(client):
     r = await client.post("/api/integrations", json={"name": "bad", "kind": "monitoring", "type": "prometheus",
                                                      "config": {"timeout_seconds": 0}})
     assert r.status_code == 422
+
+
+async def test_cause_question_runs_as_incident_and_survives_llm_failure(client):
+    await _llm(client)
+    scripted_llm.SCRIPT[:] = []  # the model "fails" on its first call
+    r = await client.post("/api/investigations", json={"kind": "question",
+                                                       "prompt": "What is causing the checkout errors?"})
+    assert r.status_code == 201 and r.json()["kind"] == "incident"
+    data = await _wait(client, r.json()["id"])
+    first = next(e for e in data["events"] if e["type"] == "user_message")
+    assert first["data"]["auto_kind"] == {"from": "question", "to": "incident"}
+    # the AI review failed, but the deterministic timeline is kept and the run completes
+    assert data["status"] == "completed" and data["error"].startswith("AI review failed")
+    assert any(e["type"] == "timeline" for e in data["events"])
+    assert any(e["type"] == "notice" for e in data["events"])
+    assert data["summary"] and data["root_cause"]
+
+    # re-run the same prompt as a plain question: no reclassification, no timeline
+    scripted_llm.SCRIPT[:] = [AIMessage(content="Checkout errors come from payments-api.")]
+    r = await client.post(f"/api/investigations/{data['id']}/rerun", json={"kind": "question"})
+    assert r.status_code == 201 and r.json()["kind"] == "question"
+    q = await _wait(client, r.json()["id"])
+    assert q["status"] == "completed" and not any(e["type"] == "timeline" for e in q["events"])

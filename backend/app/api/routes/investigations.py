@@ -15,6 +15,7 @@ from app.db.models import Investigation, InvestigationEvent, Remediation
 from app.db.session import audit, get_session
 from app.services import remediations as rsvc
 from app.services.events import EventRecorder, bus
+from app.services.intent import classify
 from app.services.investigations import runner
 
 router = APIRouter(tags=["investigations"])
@@ -26,6 +27,12 @@ class InvestigationIn(BaseModel):
     title: str | None = None
     scope: dict[str, Any] = Field(default_factory=dict,
                                   description="{llm, clusters[], vms[], monitoring[], namespace, resource{kind,name}, host}")
+    strict: bool = Field(False, description="Keep `kind` as given. By default a question that describes a failure "
+                                            "('what is causing the slowness') runs as an incident.")
+
+
+class RerunIn(BaseModel):
+    kind: Literal["incident", "question"]
 
 
 class MessageIn(BaseModel):
@@ -52,14 +59,36 @@ def _title(prompt: str) -> str:
 @router.post("/investigations", status_code=201)
 async def create(body: InvestigationIn, session: AsyncSession = Depends(get_session),
                  principal: Principal = Depends(require(Role.viewer))):
-    inv = Investigation(kind=body.kind, title=body.title or _title(body.prompt), prompt=body.prompt,
-                        scope=body.scope, created_by=principal.name)
+    return await _start(session, principal, body.kind, body.prompt, body.scope, body.title, body.strict)
+
+
+async def _start(session: AsyncSession, principal: Principal, kind: str, prompt: str, scope: dict[str, Any],
+                 title: str | None = None, strict: bool = False, rerun_of: str | None = None):
+    msg: dict[str, Any] = {"text": prompt, "by": principal.name}
+    if not strict and kind == "question" and classify(prompt) == "incident":
+        kind = "incident"
+        msg["auto_kind"] = {"from": "question", "to": "incident"}
+    if rerun_of:
+        msg["rerun_of"] = rerun_of
+    inv = Investigation(kind=kind, title=title or _title(prompt), prompt=prompt, scope=scope,
+                        created_by=principal.name)
     session.add(inv)
     await session.commit()
-    await EventRecorder(inv.id).emit("user_message", {"text": body.prompt, "by": principal.name})
-    runner.start(inv.id, body.prompt)
-    await audit(principal.name, f"{body.kind}.started", inv.id, title=inv.title)
+    await EventRecorder(inv.id).emit("user_message", msg)
+    runner.start(inv.id, prompt)
+    await audit(principal.name, f"{kind}.started", inv.id, title=inv.title)
     return _summary(inv)
+
+
+@router.post("/investigations/{inv_id}/rerun", status_code=201)
+async def rerun(inv_id: str, body: RerunIn, session: AsyncSession = Depends(get_session),
+                principal: Principal = Depends(require(Role.viewer))):
+    """Start a new investigation from the same prompt and scope, as an incident timeline or a plain question."""
+    inv = await session.get(Investigation, inv_id)
+    if not inv:
+        raise HTTPException(404, "Not found")
+    return await _start(session, principal, body.kind, inv.prompt, dict(inv.scope or {}), strict=True,
+                        rerun_of=inv.id)
 
 
 @router.get("/investigations", dependencies=[Depends(require(Role.viewer))])

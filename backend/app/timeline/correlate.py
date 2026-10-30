@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 
-from .model import CAUSAL_RANK, Relation, Timeline, TimelineEvent
+from .model import CAUSAL_RANK, LAYER_INFO, Relation, Timeline, TimelineEvent
 
 SEV = {"info": 0, "warning": 1, "critical": 2}
 CHANGE_LOOKBACK = timedelta(minutes=45)
@@ -169,6 +169,28 @@ def correlate(events: list[TimelineEvent], relations: list[Relation], focus: lis
     return Timeline(window_start=window_start, window_end=window_end, focus=focus, events=merged,
                     origin=origin.id if origin else None, chain=[e.id for e in chain], unrelated=unrelated,
                     connected_entities=sorted(connected), stats=stats, errors=errors or [])
+
+
+def summarize(tl: Timeline) -> dict[str, str | None]:
+    """Deterministic one-paragraph verdict, used when no LLM is available to review the timeline."""
+    by = tl.by_id()
+    chain = [by[i] for i in tl.chain if i in by]
+    origin = by.get(tl.origin) if tl.origin else None
+    if not origin:
+        crit = [e for e in tl.events if e.severity == "critical" and e.id not in set(tl.unrelated)]
+        if not crit:
+            return {"summary": "No failures were found in the collected window.", "root_cause": None,
+                    "severity": "info"}
+        first = min(crit, key=lambda e: e.ts)
+        return {"summary": f"No clear origin could be determined. The earliest failure is {first.title} "
+                           f"({first.entity}, {first.ts:%H:%M:%S} UTC).", "root_cause": None, "severity": "high"}
+    name = LAYER_INFO[origin.layer]["name"]
+    parts = [f"Started on the {name} layer at {origin.ts:%H:%M:%S} UTC: {origin.title}."]
+    steps = [e for e in chain if e.id != origin.id]
+    if steps:
+        parts.append("Then: " + " → ".join(e.title for e in steps[:6]) + ".")
+    severity = "critical" if any(e.severity == "critical" for e in chain) else "high"
+    return {"summary": " ".join(parts), "root_cause": origin.title, "severity": severity}
 
 
 def to_text(tl: Timeline, max_lines: int = 70) -> str:

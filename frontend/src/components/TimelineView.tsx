@@ -3,7 +3,7 @@
  * All four read the same correlated timeline and share one selected event (owned by the page).
  */
 import { useMemo, useState } from "react";
-import { ArrowRight, Check, Copy, Filter, MessageSquareText } from "lucide-react";
+import { ArrowRight, Check, Copy, Filter, MessageSquareText, Minus } from "lucide-react";
 import type { LayerId, Report, TimelineData, TimelineEvent } from "../types";
 import { Spinner } from "./ui";
 
@@ -67,7 +67,7 @@ export function TimelineVerdict({ tl, d, report, running, selected, onSelect }: 
           </div>
           <h2 style={{ margin: "6px 0 4px", fontSize: 18 }}>{report?.title ?? (origin ? `Started at ${origin.title}` : "No clear origin found yet")}</h2>
           <p className="text-2" style={{ margin: 0 }}>
-            {report?.summary ?? (origin ? `Earliest connected failure is on the ${tl.layers.find((l) => l.id === origin.layer)?.name} layer. The model is reviewing the chain.` : "Collected evidence did not show a failure connected to the focus.")}
+            {report?.summary ?? (origin ? `Earliest connected failure is on the ${tl.layers.find((l) => l.id === origin.layer)?.name} layer.${running ? " The model is reviewing the chain." : " Proposed from timing and dependencies — not reviewed by a model."}` : "Collected evidence did not show a failure connected to the focus.")}
             {origin && !originIsFocus && focusNames.length > 0 && (
               <b style={{ color: "var(--text)" }}> The resource you asked about ({focusNames[0]}) is downstream — the origin is elsewhere.</b>
             )}
@@ -326,12 +326,12 @@ export function EvidencePanel({ tl, d, selected, onAsk }: {
 }
 
 /* ---------------------------------------------------------------- progress */
-export function PhaseStrip({ phases }: { phases: { name: string; detail: string; state: "done" | "active" | "pending" }[] }) {
+export function PhaseStrip({ phases }: { phases: { name: string; detail: string; state: "done" | "active" | "pending" | "skipped" }[] }) {
   return (
     <div className="phase-strip">
       {phases.map((p) => (
         <div key={p.name} className={`phase ${p.state}`}>
-          <span className="phase-icon">{p.state === "done" ? <Check size={14} /> : p.state === "active" ? <Spinner size={13} /> : <span className="dot h-unknown" style={{ boxShadow: "none" }} />}</span>
+          <span className="phase-icon">{p.state === "done" ? <Check size={14} /> : p.state === "active" ? <Spinner size={13} /> : p.state === "skipped" ? <Minus size={14} /> : <span className="dot h-unknown" style={{ boxShadow: "none" }} />}</span>
           <div style={{ minWidth: 0 }}><div className="small" style={{ fontWeight: 600 }}>{p.name}</div><div className="small muted phase-detail">{p.detail}</div></div>
         </div>
       ))}

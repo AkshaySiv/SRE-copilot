@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronDown, ChevronRight, MessageSquareText, Send } from "lucide-react";
+import { ChevronDown, ChevronRight, MessageSquareText, Send, Siren } from "lucide-react";
 import { api, timeAgo } from "../api";
-import { startInvestigation } from "../lib";
+import { classifyPrompt, startInvestigation } from "../lib";
 import type { Investigation } from "../types";
 import { ScopePicker, type Scope } from "../components/ScopePicker";
 import { ErrorBox, Spinner, useAsync } from "../components/ui";
@@ -32,7 +32,7 @@ export default function Ask() {
 
   return (
     <div className="page" style={{ maxWidth: 980 }}>
-      <div className="page-head"><div><h1>Ask the copilot</h1><p>Ask about your infrastructure in plain language — no kubectl or shell commands needed.</p></div></div>
+      <div className="page-head"><div><h1>Ask the copilot</h1><p>Ask about your infrastructure in plain language — no kubectl or shell commands needed. Describing a failure starts an incident timeline automatically.</p></div></div>
       <form className="panel hero-ask col" onSubmit={(e) => { e.preventDefault(); ask(text); }}>
         <textarea className="textarea" autoFocus placeholder="e.g. Why is the payments service slow today?" value={text} onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(text); } }} />
@@ -41,6 +41,9 @@ export default function Ask() {
           <span className="spacer" />
           <button className="btn primary" disabled={busy || !text.trim()}>{busy ? <Spinner size={14} /> : <Send size={14} />} Ask</button>
         </div>
+        {text.trim().length > 5 && (classifyPrompt(text) === "incident"
+          ? <div className="intent-hint incident"><Siren size={14} /><span>Sounds like something is broken — this runs as an <b>incident investigation</b>: one timeline across every layer, then the root cause.</span></div>
+          : <div className="intent-hint"><MessageSquareText size={14} /><span>Runs as a <b>question</b>: a direct answer from your clusters, servers and monitoring.</span></div>)}
         {showScope && <ScopePicker value={scope} onChange={setScope} />}
         <ErrorBox error={err} />
       </form>

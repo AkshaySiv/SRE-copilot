@@ -85,3 +85,9 @@ export interface TimelineData {
   chain: string[]; unrelated: string[]; connected_entities: string[]; stats: Record<string, any>; errors: string[];
   layers: { id: LayerId; name: string; stack: string }[];
 }
+
+export interface Insight {
+  title: string; category: string; evidence: string[]; fix: string | null; confidence: "high" | "medium"; subject: string | null;
+}
+export interface Diagnosis { health: string; insights: Insight[]; ai_available: boolean }
+export interface AIExplanation { cause: string; fix: string | null; confidence: "high" | "medium" | "low"; model: string; cached: boolean }

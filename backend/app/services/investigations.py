@@ -17,7 +17,7 @@ from app.db.models import Investigation, InvestigationEvent, Remediation
 from app.db.session import sessionmaker
 from app.plugins import ToolSpec
 from app.remediation.base import ACTIONS, catalog
-from app.timeline import to_text
+from app.timeline import summarize, to_text
 from app.timeline.service import build_timeline
 
 from .events import EventRecorder
@@ -147,10 +147,13 @@ class InvestigationRunner:
             scope = dict(inv.scope or {})
             scoped = await resolve_scope(s, scope)
         try:
-            if not scoped.get("llm"):
-                raise RuntimeError("No LLM configured. Add one under Integrations.")
-            llm_plugin = await pool.get(scoped["llm"][0])
-            assert isinstance(llm_plugin, LLMProvider)
+            llm_plugin: LLMProvider | None = None
+            if scoped.get("llm"):
+                llm_plugin = await pool.get(scoped["llm"][0])
+                assert isinstance(llm_plugin, LLMProvider)
+            effective_mode = "question" if (mode == "question" or is_followup) else "incident"
+            if llm_plugin is None and effective_mode == "question":
+                raise RuntimeError("No LLM configured. Add one under Integrations to ask questions.")
             plugins = []
             for kind in ("kubernetes", "vm", "monitoring"):
                 for integ in scoped.get(kind, []):
@@ -158,21 +161,11 @@ class InvestigationRunner:
                         plugins.append(await pool.get(integ))
                     except Exception as exc:  # noqa: BLE001
                         await rec.emit("thinking", {"text": f"Skipping integration {integ.name}: {exc}"})
-            await rec.emit("status", {"phase": "starting", "llm": llm_plugin.name,
+            await rec.emit("status", {"phase": "starting", "llm": llm_plugin.name if llm_plugin else None,
                                       "integrations": [p.name for p in plugins]})
 
-            async def search_past(query: str):
-                return await similar_incidents(query, exclude_id=inv_id) or "no similar past incidents"
-
-            internal = [ToolSpec("search_past_incidents", "Search previously investigated incidents and how they were "
-                                 "fixed.", SearchIncidentsArgs, search_past, "Searched past incidents for '{query}'",
-                                 "history")]
-            past = await similar_incidents(prompt, exclude_id=inv_id, limit=3)
-            past_text = "\n".join(f"- {p['date']}: {p['title']} - cause: {p['root_cause']} - fixed by: "
-                                  f"{', '.join(p['fixes_applied']) or 'n/a'}" for p in past)
-            kinds_in_scope = {str(p.kind) for p in plugins}
-            effective_mode = "question" if (mode == "question" or is_followup) else "incident"
-
+            # 1. The deterministic cross-layer timeline - needs no LLM.
+            tl = None
             timeline_text = ""
             if effective_mode == "incident" and settings.timeline_enabled and plugins:
                 await rec.emit("status", {"phase": "collecting"})
@@ -185,16 +178,52 @@ class InvestigationRunner:
                     timeline_text = to_text(tl)
                 except Exception as exc:  # noqa: BLE001 - fall back to the classic investigation
                     log.exception("Timeline build failed for %s", inv_id)
+                    tl = None
                     await rec.emit("thinking", {"text": f"Timeline collection failed ({exc}); investigating step by step."})
 
-            result = await asyncio.wait_for(run_investigation(RunRequest(
-                mode=effective_mode, prompt=prompt, llm=llm_plugin.chat_model(), plugins=plugins, emit=rec.emit,
-                history=await self._history(inv_id), focus=_focus(scope), past_incidents=past_text,
-                action_catalog=catalog(kinds_in_scope) if settings.remediation_mode != "disabled" else [],
-                internal_tools=internal, max_steps=settings.agent_max_steps, tool_timeout=settings.tool_timeout_seconds,
-                tool_output_max_chars=settings.tool_output_max_chars, max_parallel_tools=settings.max_parallel_tools,
-                live=rec.live if settings.stream_responses else None, timeline=timeline_text,
-            )), timeout=settings.agent_timeout_seconds)
+            if llm_plugin is None:
+                if tl is None:
+                    raise RuntimeError("No LLM configured and no timeline could be collected. "
+                                       "Add an LLM and at least one cluster, VM or monitoring integration.")
+                await self._finish_timeline_only(inv_id, rec, tl, "No AI model connected - showing the correlated "
+                                                 "timeline only. Add an LLM under Integrations for an AI report "
+                                                 "and suggested fixes.")
+                return
+
+            # 2. The model reviews the timeline (or investigates step by step) and writes the report.
+            async def search_past(query: str):
+                return await similar_incidents(query, exclude_id=inv_id) or "no similar past incidents"
+
+            internal = [ToolSpec("search_past_incidents", "Search previously investigated incidents and how they were "
+                                 "fixed.", SearchIncidentsArgs, search_past, "Searched past incidents for '{query}'",
+                                 "history")]
+            past = await similar_incidents(prompt, exclude_id=inv_id, limit=3)
+            past_text = "\n".join(f"- {p['date']}: {p['title']} - cause: {p['root_cause']} - fixed by: "
+                                  f"{', '.join(p['fixes_applied']) or 'n/a'}" for p in past)
+            kinds_in_scope = {str(p.kind) for p in plugins}
+
+            try:
+                result = await asyncio.wait_for(run_investigation(RunRequest(
+                    mode=effective_mode, prompt=prompt, llm=llm_plugin.chat_model(), plugins=plugins, emit=rec.emit,
+                    history=await self._history(inv_id), focus=_focus(scope), past_incidents=past_text,
+                    action_catalog=catalog(kinds_in_scope) if settings.remediation_mode != "disabled" else [],
+                    internal_tools=internal, max_steps=settings.agent_max_steps,
+                    tool_timeout=settings.tool_timeout_seconds, tool_output_max_chars=settings.tool_output_max_chars,
+                    max_parallel_tools=settings.max_parallel_tools,
+                    live=rec.live if settings.stream_responses else None, timeline=timeline_text,
+                )), timeout=settings.agent_timeout_seconds)
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                raise
+            except Exception as exc:  # noqa: BLE001
+                if tl is None:
+                    raise
+                # The model failed, but the timeline is still the answer - keep it rather than failing the run.
+                log.exception("AI review failed for %s; keeping the timeline", inv_id)
+                why = f"Timed out after {settings.agent_timeout_seconds}s" if isinstance(exc, asyncio.TimeoutError) \
+                    else f"{type(exc).__name__}: {exc}"
+                await self._finish_timeline_only(inv_id, rec, tl, f"The AI review failed ({why}). "
+                                                 "The correlated timeline below is still valid.", error=why)
+                return
 
             async with sessionmaker()() as s:
                 inv = await s.get(Investigation, inv_id)
@@ -232,6 +261,22 @@ class InvestigationRunner:
             await self._finish(inv_id, "failed", msg)
             await rec.emit("error", {"message": msg})
             await rec.emit("done", {"status": "failed"})
+
+    @staticmethod
+    async def _finish_timeline_only(inv_id: str, rec: EventRecorder, tl, notice: str, error: str | None = None) -> None:
+        verdict = summarize(tl)
+        async with sessionmaker()() as s:
+            inv = await s.get(Investigation, inv_id)
+            assert inv is not None
+            inv.summary = verdict["summary"]
+            inv.root_cause = verdict["root_cause"]
+            inv.severity = verdict["severity"]
+            inv.status = "completed"
+            inv.error = f"AI review failed: {error}" if error else None
+            inv.completed_at = datetime.now(timezone.utc)
+            await s.commit()
+        await rec.emit("notice", {"text": notice, "level": "warning" if error else "info"})
+        await rec.emit("done", {"status": "completed", "timeline_only": True, "tool_calls": 0})
 
     @staticmethod
     async def _finish(inv_id: str, status: str, error: str) -> None:

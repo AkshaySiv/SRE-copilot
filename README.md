@@ -47,6 +47,23 @@ Every incident investigation is built around **one timeline across every technol
 The demo cluster includes two incidents to try it on: a bad release in `payments`, and a full node disk in `sre-demo`
 that evicts the database and breaks the backend two layers above it.
 
+- **Works without an LLM.** Steps 1-3 are deterministic. With no model connected (or if the model fails), the
+  investigation still completes with the timeline, origin and causal chain; only the AI report and fixes are skipped.
+- **Incident or question is detected automatically.** A question that describes a failure ("what is causing the
+  slowness?", "checkout is failing") runs as an incident; lookups ("which pods use > 1 GB?") stay questions. Either can
+  be re-run as the other with one click.
+
+## Why is it failing? (cluster map)
+
+Click any failing resource on the map: the copilot states the exact cause in one line, read directly from Kubernetes
+(no LLM), with the evidence and a fix — for example *Missing Secret `report-db-credentials` - referenced by env
+DB_PASSWORD*, *Image tag does not exist*, *Out of memory: exceeds its 256Mi limit*, *Can't be scheduled: not enough
+cpu*, *Selector `app=checkout-v2` matches no pods*, or the first error / stack trace from the crashed container's logs.
+When a pod can't reach a dependency, it follows the connection to that Service and reports why *it* is down.
+If the rules can't tell (an app-specific exit code), **Explain with AI** sends the same evidence — redacted, never
+Secret values — to the default LLM for a one-line cause and fix (cached for 10 minutes).
+The `platform` namespace in the demo cluster has examples of both.
+
 ## Quick start (2 minutes, no infrastructure)
 
 The demo cluster simulates an RKE2 cluster with a real-looking incident: a bad `payments-api` release

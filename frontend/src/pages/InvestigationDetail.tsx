@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  AlertTriangle, ArrowLeft, Bot, CheckCircle2, CircleSlash, FileSearch, FlaskConical, Play, Send, ShieldCheck, Square, Wrench, XCircle,
+  AlertTriangle, ArrowLeft, Bot, CheckCircle2, ChevronRight, CircleSlash, FileSearch, FlaskConical, Info, MessageSquareText, Play, Send, ShieldCheck, Siren, Square, Wrench, XCircle,
 } from "lucide-react";
 import { api, streamInvestigation, timeAgo } from "../api";
 import { useMe } from "../App";
@@ -45,39 +45,90 @@ function LiveBlock({ live }: { live: LiveText }) {
   return <div className="thinking"><Bot size={13} style={{ verticalAlign: -2 }} /> {live.text}<span className="caret" /></div>;
 }
 
-function Timeline({ events, running, live }: { events: InvEvent[]; running: boolean; live: LiveText | null }) {
+const WORK = new Set(["thinking", "tool_call", "tool_result", "llm_call", "status", "collecting", "timeline"]);
+
+function renderEvent(e: InvEvent, results: Map<string, InvEvent>) {
+  switch (e.type) {
+    case "user_message": return <div key={e.seq} className="msg-user">{e.data.text}</div>;
+    case "thinking": return <div key={e.seq} className="thinking"><Bot size={13} style={{ verticalAlign: -2 }} /> {e.data.text}</div>;
+    case "tool_call": return <ToolStep key={e.seq} call={e} result={results.get(e.data.id)} />;
+    case "answer": return <div key={e.seq} className="answer"><Markdown>{e.data.markdown}</Markdown></div>;
+    case "notice": return <Notice key={e.seq} ev={e} />;
+    case "report": return (
+      <div key={e.seq} className="answer" style={{ padding: 14, borderColor: "var(--accent)" }}>
+        <div className="row"><FileSearch size={16} style={{ color: "var(--accent)" }} /><b>Incident report ready</b></div>
+        <p className="text-2" style={{ margin: "6px 0 0" }}>{e.data.report?.summary}</p>
+      </div>
+    );
+    case "llm_call": return (
+      <div key={e.seq} className="muted small" style={{ paddingLeft: 12 }}>
+        Model step {e.data.step} · {(e.data.duration_ms / 1000).toFixed(1)}s
+      </div>
+    );
+    case "error": return <ErrorBox key={e.seq} error={e.data.message} />;
+    case "done": return (
+      <div key={e.seq} className="muted small" style={{ textAlign: "center" }}>
+        {e.data.status === "completed" ? (e.data.timeline_only ? "Finished · timeline only" : `Finished · ${e.data.tool_calls ?? 0} checks`) : `Stopped (${e.data.status})`}
+        {e.data.usage?.total_tokens ? ` · ${e.data.usage.total_tokens.toLocaleString()} tokens` : ""}
+      </div>
+    );
+    default: return null;
+  }
+}
+
+function Notice({ ev }: { ev: InvEvent }) {
+  const warn = ev.data.level === "warning";
+  return <div className={`banner ${warn ? "warning" : "info"}`}>{warn ? <AlertTriangle size={15} /> : <Info size={15} />}<span className="grow">{ev.data.text}</span>
+    {!warn && <Link to="/integrations" className="small">Add an LLM →</Link>}</div>;
+}
+
+/** Tool calls and model steps between two messages, folded into one line: "Checked 5 sources · 3 model steps · 12.4 s". */
+function WorkGroup({ items, results, open }: { items: InvEvent[]; results: Map<string, InvEvent>; open: boolean }) {
+  const calls = items.filter((e) => e.type === "tool_call");
+  const failed = calls.filter((c) => results.get(c.data.id)?.data.ok === false).length;
+  const steps = items.filter((e) => e.type === "llm_call");
+  const secs = steps.reduce((a, e) => a + (e.data.duration_ms ?? 0), 0) / 1000
+    + calls.reduce((a, c) => a + (results.get(c.data.id)?.data.duration_ms ?? 0), 0) / 1000;
+  const sources = new Set(calls.map((c) => c.data.integration)).size;
+  const body = items.map((e) => renderEvent(e, results)).filter(Boolean);
+  if (!body.length) return null;
+  return (
+    <details className="work-group" open={open}>
+      <summary>
+        <ChevronRight size={14} className="chev" />
+        <span className="grow">{calls.length ? `Ran ${calls.length} check${calls.length === 1 ? "" : "s"} across ${sources} source${sources === 1 ? "" : "s"}` : "Model reasoning"}
+          {failed ? <span style={{ color: "var(--warning)" }}> · {failed} failed</span> : null}</span>
+        <span className="muted small">{steps.length} model step{steps.length === 1 ? "" : "s"}{secs ? ` · ${secs.toFixed(1)} s` : ""}</span>
+      </summary>
+      <div className="work-body">{body}</div>
+    </details>
+  );
+}
+
+function Timeline({ events, running, live, compact = false }: { events: InvEvent[]; running: boolean; live: LiveText | null; compact?: boolean }) {
   const results = useMemo(() => new Map(events.filter((e) => e.type === "tool_result").map((e) => [e.data.id, e])), [events]);
   const lastStatus = [...events].reverse().find((e) => e.type === "status")?.data;
   const lastPhase = lastStatus?.phase;
+  let body: React.ReactNode[];
+  if (!compact) {
+    body = events.map((e) => renderEvent(e, results));
+  } else {
+    body = [];
+    let buf: InvEvent[] = [];
+    const flush = (last: boolean) => {
+      if (buf.length) body.push(<WorkGroup key={`w${buf[0].seq}`} items={buf} results={results} open={running && last} />);
+      buf = [];
+    };
+    for (const e of events) {
+      if (WORK.has(e.type)) { buf.push(e); continue; }
+      flush(false);
+      body.push(renderEvent(e, results));
+    }
+    flush(true);
+  }
   return (
     <div className="timeline">
-      {events.map((e) => {
-        switch (e.type) {
-          case "user_message": return <div key={e.seq} className="msg-user">{e.data.text}</div>;
-          case "thinking": return <div key={e.seq} className="thinking"><Bot size={13} style={{ verticalAlign: -2 }} /> {e.data.text}</div>;
-          case "tool_call": return <ToolStep key={e.seq} call={e} result={results.get(e.data.id)} />;
-          case "answer": return <div key={e.seq} className="answer"><Markdown>{e.data.markdown}</Markdown></div>;
-          case "report": return (
-            <div key={e.seq} className="answer" style={{ padding: 14, borderColor: "var(--accent)" }}>
-              <div className="row"><FileSearch size={16} style={{ color: "var(--accent)" }} /><b>Incident report ready</b></div>
-              <p className="text-2" style={{ margin: "6px 0 0" }}>{e.data.report?.summary}</p>
-            </div>
-          );
-          case "llm_call": return (
-            <div key={e.seq} className="muted small" style={{ paddingLeft: 12 }}>
-              Model step {e.data.step} · {(e.data.duration_ms / 1000).toFixed(1)}s
-            </div>
-          );
-          case "error": return <ErrorBox key={e.seq} error={e.data.message} />;
-          case "done": return (
-            <div key={e.seq} className="muted small" style={{ textAlign: "center" }}>
-              {e.data.status === "completed" ? `Finished · ${e.data.tool_calls ?? 0} checks` : `Stopped (${e.data.status})`}
-              {e.data.usage?.total_tokens ? ` · ${e.data.usage.total_tokens.toLocaleString()} tokens` : ""}
-            </div>
-          );
-          default: return null;
-        }
-      })}
+      {body}
       {running && live && live.text && <LiveBlock live={live} />}
       {running && !(live && live.text) && <div className="row muted pulse"><Spinner size={14} /> {PHASES[lastPhase] ?? "Working…"}{lastPhase === "thinking" && lastStatus?.step ? ` (step ${lastStatus.step})` : ""}</div>}
     </div>
@@ -194,6 +245,7 @@ function ReportPanel({ report, remediations, onRemChange, sticky = true }: { rep
 
 export default function InvestigationDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const detail = useAsync(() => api<Detail>(`/investigations/${id}`), [id]);
   const [events, setEvents] = useState<InvEvent[]>([]);
   const [rems, setRems] = useState<Remediation[]>([]);
@@ -266,6 +318,15 @@ export default function InvestigationDetail() {
   };
   const updateRem = (r: Remediation) => setRems((prev) => prev.map((x) => x.id === r.id ? r : x));
   const showSide = d.kind === "incident" || !!report;
+  const rerun = async (kind: "incident" | "question") => {
+    try {
+      const inv = await api<{ id: string }>(`/investigations/${d.id}/rerun`, { body: { kind } });
+      navigate(`/investigations/${inv.id}`);
+    } catch (e) { setSendErr(e); }
+  };
+  const first = events.find((e) => e.type === "user_message")?.data;
+  const notice = [...events].reverse().find((e) => e.type === "notice");
+  const timelineOnly = !!events.find((e) => e.type === "done" && e.data.timeline_only);
 
   return (
     <div className="page">
@@ -273,17 +334,24 @@ export default function InvestigationDetail() {
         <div className="grow">
           <Link to="/investigations" className="small row" style={{ gap: 4 }}><ArrowLeft size={13} /> Investigations</Link>
           <h1 style={{ marginTop: 6 }}>{report?.title ?? d.title}</h1>
-          <div className="row small muted" style={{ marginTop: 6 }}>
+          <div className="row small muted wrap inv-meta" style={{ marginTop: 6 }}>
             <StatusPill status={running ? "running" : d.status} running={running} />
             <span>{d.kind === "incident" ? "Incident investigation" : "Question"}</span>·<span>by {d.created_by}</span>·<span>{timeAgo(d.created_at)}</span>
             {d.scope?.namespace ? <><span>·</span><span className="chip">ns: {String(d.scope.namespace)}</span></> : null}
           </div>
         </div>
         {running && <button className="btn danger" onClick={() => api(`/investigations/${d.id}/cancel`, { body: {} })}><Square size={13} /> Stop</button>}
+        {!running && d.kind === "question" && <button className="btn" onClick={() => rerun("incident")} title="Collect a timeline across every layer and find the root cause"><Siren size={14} /> Run as incident timeline</button>}
       </div>
+      {first?.auto_kind && (
+        <div className="banner info" style={{ marginBottom: 16 }}>
+          <Info size={15} /><span className="grow">Your question describes a failure, so it ran as an <b>incident investigation</b> with a timeline across every layer.</span>
+          {!running && <button className="btn sm ghost" onClick={() => rerun("question")}><MessageSquareText size={13} /> Answer as a plain question instead</button>}
+        </div>
+      )}
       {timeline && derived ? (
         <div className="col" style={{ gap: 16 }}>
-          <PhaseStrip phases={phases(events, timeline, report, running)} />
+          <PhaseStrip phases={phases(events, timeline, report, running, timelineOnly, !!d.error)} />
           <TimelineVerdict tl={timeline} d={derived} report={report} running={running} selected={activeSel} onSelect={setSelected} />
           <Swimlanes tl={timeline} d={derived} selected={activeSel} onSelect={setSelected} />
           <div className="inv-layout">
@@ -296,7 +364,7 @@ export default function InvestigationDetail() {
                 </button>
                 {(showSteps || running) && <div className="panel-pad" style={{ paddingTop: 0 }}><Timeline events={events} running={running} live={live} /></div>}
               </div>
-              {d.error && !running && <ErrorBox error={d.error} />}
+              {d.error && !running && !timelineOnly && <ErrorBox error={d.error} />}
               <div ref={bottom} />
               <div className="composer">
                 <form className="ask-inner" onSubmit={(e) => { e.preventDefault(); if (followUp.trim() && !running) send(); }}>
@@ -309,6 +377,13 @@ export default function InvestigationDetail() {
             <div className="col" style={{ gap: 16, minWidth: 0 }}>
               <EvidencePanel tl={timeline} d={derived} selected={activeSel} onAsk={(t) => { setFollowUp(t); setShowSteps(true); }} />
               {report ? <ReportPanel report={report} remediations={rems} onRemChange={updateRem} sticky={false} />
+                : timelineOnly ? (
+                  <div className="panel panel-pad col" style={{ gap: 10 }}>
+                    <h3 style={{ margin: 0 }}>Correlated verdict</h3>
+                    <p className="text-2" style={{ margin: 0 }}>{d.summary}</p>
+                    {notice && <Notice ev={notice} />}
+                  </div>
+                )
                 : <div className="panel"><Empty>{running ? <><Spinner /><div style={{ marginTop: 8 }}>The model is reviewing the timeline — the report and fixes appear here.</div></> : "No report."}</Empty></div>}
               <div className="row small muted" style={{ gap: 6 }}><ShieldCheck size={14} /> Read-only investigation. Fixes run only after a dry-run and your approval.</div>
             </div>
@@ -317,7 +392,7 @@ export default function InvestigationDetail() {
       ) : (
       <div className={showSide ? "inv-layout" : ""} style={showSide ? {} : { maxWidth: 900, margin: "0 auto" }}>
         <div className="col">
-          <Timeline events={events} running={running} live={live} />
+          <Timeline events={events} running={running} live={live} compact />
           {d.error && !running && <ErrorBox error={d.error} />}
           <div ref={bottom} />
           <div className="composer">
@@ -352,14 +427,17 @@ export default function InvestigationDetail() {
   );
 }
 
-function phases(events: InvEvent[], tl: TimelineData, report: Report | null, running: boolean) {
+function phases(events: InvEvent[], tl: TimelineData, report: Report | null, running: boolean, timelineOnly: boolean, failed: boolean) {
   const steps = events.filter((e) => e.type === "llm_call").length;
   const done = !running || !!report;
+  const review = timelineOnly
+    ? { name: "Reviewed by model", detail: failed ? "AI review failed · timeline kept" : "skipped · no model connected", state: "skipped" as const }
+    : { name: "Reviewed by model", detail: report ? `chain ${report.causal_chain?.length ? "confirmed" : "reviewed"} · ${steps} step${steps === 1 ? "" : "s"}` : `${steps} step${steps === 1 ? "" : "s"} so far`, state: done ? "done" as const : "active" as const };
   const focus = tl.focus.map((f) => f.split("/").slice(-1)[0]).slice(0, 2).join(", ") || "whole scope";
   return [
     { name: "Scoped", detail: `focus: ${focus}`, state: "done" as const },
     { name: "Collected", detail: `${tl.stats.raw_signals ?? 0} signals · ${(tl.stats.integrations_queried ?? []).length} integrations · ${(tl.stats.collect_seconds ?? 0) < 1 ? "<1" : tl.stats.collect_seconds} s`, state: "done" as const },
     { name: "Correlated", detail: tl.origin ? `origin on ${tl.layers.find((l) => l.id === tl.events.find((e) => e.id === tl.origin)?.layer)?.name ?? "?"} layer` : "no clear origin", state: "done" as const },
-    { name: "Reviewed by model", detail: report ? `chain ${report.causal_chain?.length ? "confirmed" : "reviewed"} · ${steps} step${steps === 1 ? "" : "s"}` : `${steps} step${steps === 1 ? "" : "s"} so far`, state: done ? "done" as const : "active" as const },
+    review,
   ];
 }

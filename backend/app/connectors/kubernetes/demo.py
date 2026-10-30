@@ -294,6 +294,53 @@ class DemoState:
         self.event(None, "Node", "worker-3", "Warning", "EvictionThresholdMet",
                    "Attempting to reclaim ephemeral-storage", 3, 40)
         self._sre_demo()
+        self._platform()
+
+    def _platform(self) -> None:
+        """Small single-pod failures for the cluster map's 'why it is failing' insights."""
+        ns = "platform"
+        self.add("Namespace", {"metadata": _meta(ns, labels={"kubernetes.io/metadata.name": ns}, minutes_ago=60 * 24 * 30),
+                               "status": {"phase": "Active"}})
+        reg = "harbor.internal/platform"
+        # 1. references a Secret that does not exist -> CreateContainerConfigError
+        rg = _container("report-generator", f"{reg}/report-generator:2.1.0", env={"REPORT_BUCKET": "reports"})
+        rg["env"].append({"name": "DB_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "report-db-credentials",
+                                                                                "key": "password"}}})
+        self.deployment(ns, "report-generator", [rg], replicas=1, minutes_ago=60 * 24 * 6)
+        # 2. exits with an application-specific code and no error line in its logs
+        self.deployment(ns, "pg-cron", [_container("pg-cron", f"{reg}/pg-cron:1.6.4",
+                                                   env={"PGHOST": "postgres-payments.payments.svc"})],
+                        replicas=1, minutes_ago=60 * 24 * 6)
+        for p in self.objs["Pod"]:
+            if m.ns_of(p) != ns:
+                continue
+            pname = m.name_of(p)
+            p["status"]["conditions"][-1]["status"] = "False"
+            if pname.startswith("report-generator"):
+                p["status"]["containerStatuses"] = [{
+                    "name": "report-generator", "ready": False, "restartCount": 0, "image": f"{reg}/report-generator:2.1.0",
+                    "state": {"waiting": {"reason": "CreateContainerConfigError",
+                                          "message": 'secret "report-db-credentials" not found'}}}]
+                p["status"]["phase"] = "Pending"
+                self.logs[(ns, pname)] = {"current": "", "previous": ""}
+                self.event(ns, "Pod", pname, "Warning", "Failed",
+                           'Error: secret "report-db-credentials" not found', 31, 0.4)
+            else:
+                p["status"]["containerStatuses"] = [{
+                    "name": "pg-cron", "ready": False, "restartCount": 9, "image": f"{reg}/pg-cron:1.6.4",
+                    "state": {"waiting": {"reason": "CrashLoopBackOff",
+                                          "message": "back-off 5m0s restarting failed container=pg-cron"}},
+                    "lastState": {"terminated": {"reason": "Error", "exitCode": 7, "finishedAt": _ts(0.8)}}}]
+                self.logs[(ns, pname)] = {"current": "", "previous": (
+                    f"{_ts(0.9)} pg_cron 1.6.4 scheduler starting\n"
+                    f"{_ts(0.9)} connecting to postgres-payments.payments.svc:5432 database=cron user=cron\n"
+                    f"{_ts(0.85)} cron.database_name is 'postgres' but jobs table lives in 'cron'\n"
+                    f"{_ts(0.8)} scheduler exiting, status 7\n")}
+                self.event(ns, "Pod", pname, "Warning", "BackOff",
+                           f"Back-off restarting failed container pg-cron in pod {pname}", 44, 0.5)
+        for d in self.objs["Deployment"]:
+            if m.ns_of(d) == ns:
+                d["status"].update(readyReplicas=0, availableReplicas=0)
 
     def _sre_demo(self) -> None:
         """Second scenario, across layers: worker-2's disk fills -> postgres-0 evicted and stuck Pending (local

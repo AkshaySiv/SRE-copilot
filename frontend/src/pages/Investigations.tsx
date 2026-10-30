@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight, Search, Siren } from "lucide-react";
 import { api, timeAgo } from "../api";
 import { startInvestigation } from "../lib";
@@ -51,7 +51,7 @@ export default function Investigations() {
         <div className="row wrap">
           <button className="btn ghost sm" onClick={() => setShowScope(!showScope)}>{showScope ? <ChevronDown size={14} /> : <ChevronRight size={14} />} Scope & model</button>
           <span className="spacer" />
-          <span className="muted small">Read-only investigation · fixes need your approval</span>
+          <span className="muted small">Something broken? Describe it here · just asking? use <Link to="/ask">Ask</Link></span>
           <button className="btn primary" disabled={busy || prompt.trim().length < 3} onClick={submit}>{busy ? <Spinner size={14} /> : <Siren size={15} />} Start investigation</button>
         </div>
         {showScope && <ScopePicker value={scope} onChange={setScope} />}
